@@ -21,22 +21,10 @@ pub enum ParseError {
     MessageTooSmall { length: u32, min: u32 },
     /// 无效的消息类型
     InvalidMessageType(String),
-    /// 无效的事件类型
-    InvalidEventType(String),
     /// Payload 反序列化失败
     PayloadDeserialize(serde_json::Error),
     /// IO 错误
-    Io(std::io::Error),
-    /// 服务端错误事件
-    ServerError {
-        error_code: String,
-        error_message: String,
-    },
-    /// 服务端异常事件
-    ServerException {
-        exception_type: String,
-        message: String,
-    },
+    Io(std::io::Error)
 }
 
 impl std::error::Error for ParseError {}
@@ -74,21 +62,8 @@ impl fmt::Display for ParseError {
                 write!(f, "消息长度过小: {} 字节 (最小 {})", length, min)
             }
             Self::InvalidMessageType(t) => write!(f, "无效的消息类型: {}", t),
-            Self::InvalidEventType(t) => write!(f, "无效的事件类型: {}", t),
             Self::PayloadDeserialize(e) => write!(f, "Payload 反序列化失败: {}", e),
-            Self::Io(e) => write!(f, "IO 错误: {}", e),
-            Self::ServerError {
-                error_code,
-                error_message,
-            } => {
-                write!(f, "服务端错误 [{}]: {}", error_code, error_message)
-            }
-            Self::ServerException {
-                exception_type,
-                message,
-            } => {
-                write!(f, "服务端异常 [{}]: {}", exception_type, message)
-            }
+            Self::Io(e) => write!(f, "IO 错误: {}", e)
         }
     }
 }
