@@ -65,6 +65,19 @@ pub struct ModelsResponse {
 
 // === Messages 端点类型 ===
 
+/// Thinking 配置
+#[derive(Debug, Deserialize, Clone)]
+pub struct Thinking {
+    #[serde(rename = "type")]
+    pub thinking_type: String,
+    #[serde(default = "default_budget_tokens")]
+    pub budget_tokens: i32,
+}
+
+fn default_budget_tokens() -> i32 {
+    20000
+}
+
 /// Messages 请求体
 #[derive(Debug, Deserialize)]
 pub struct MessagesRequest {
@@ -78,6 +91,7 @@ pub struct MessagesRequest {
     pub tool_choice: Option<serde_json::Value>,
     pub temperature: Option<f64>,
     pub metadata: Option<HashMap<String, serde_json::Value>>,
+    pub thinking: Option<Thinking>,
 }
 
 /// 消息

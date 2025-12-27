@@ -13,6 +13,25 @@ use uuid::Uuid;
 
 use crate::kiro::model::events::Event;
 
+/// 找到小于等于目标位置的最近有效UTF-8字符边界
+///
+/// UTF-8字符可能占用1-4个字节，直接按字节位置切片可能会切在多字节字符中间导致panic。
+/// 这个函数从目标位置向前搜索，找到最近的有效字符边界。
+fn find_char_boundary(s: &str, target: usize) -> usize {
+    if target >= s.len() {
+        return s.len();
+    }
+    if target == 0 {
+        return 0;
+    }
+    // 从目标位置向前搜索有效的字符边界
+    let mut pos = target;
+    while pos > 0 && !s.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    pos
+}
+
 /// SSE 事件
 #[derive(Debug, Clone)]
 pub struct SseEvent {
@@ -325,6 +344,16 @@ pub struct StreamContext {
     pub output_tokens: i32,
     /// 工具块索引映射 (tool_id -> block_index)
     pub tool_block_indices: HashMap<String, i32>,
+    /// thinking 是否启用
+    pub thinking_enabled: bool,
+    /// thinking 内容缓冲区
+    pub thinking_buffer: String,
+    /// 是否在 thinking 块内
+    pub in_thinking_block: bool,
+    /// thinking 块是否已提取完成
+    pub thinking_extracted: bool,
+    /// thinking 块索引
+    pub thinking_block_index: Option<i32>,
 }
 
 impl StreamContext {
@@ -336,6 +365,28 @@ impl StreamContext {
             input_tokens,
             output_tokens: 0,
             tool_block_indices: HashMap::new(),
+            thinking_enabled: false,
+            thinking_buffer: String::new(),
+            in_thinking_block: false,
+            thinking_extracted: false,
+            thinking_block_index: None,
+        }
+    }
+
+    /// 创建启用thinking的StreamContext
+    pub fn new_with_thinking(model: impl Into<String>, input_tokens: i32, thinking_enabled: bool) -> Self {
+        Self {
+            state_manager: SseStateManager::new(),
+            model: model.into(),
+            message_id: format!("msg_{}", Uuid::new_v4().to_string().replace('-', "")),
+            input_tokens,
+            output_tokens: 0,
+            tool_block_indices: HashMap::new(),
+            thinking_enabled,
+            thinking_buffer: String::new(),
+            in_thinking_block: false,
+            thinking_extracted: false,
+            thinking_block_index: None,
         }
     }
 
@@ -422,6 +473,11 @@ impl StreamContext {
         // 估算 tokens
         self.output_tokens += estimate_tokens(content);
 
+        // 如果启用了thinking，需要处理thinking块
+        if self.thinking_enabled {
+            return self.process_content_with_thinking(content);
+        }
+
         // 发送文本增量
         if let Some(event) = self.state_manager.handle_content_block_delta(
             0, // 文本块索引固定为 0
@@ -438,6 +494,146 @@ impl StreamContext {
         }
 
         Vec::new()
+    }
+
+    /// 处理包含thinking块的内容
+    fn process_content_with_thinking(&mut self, content: &str) -> Vec<SseEvent> {
+        let mut events = Vec::new();
+
+        // 将内容添加到缓冲区进行处理
+        self.thinking_buffer.push_str(content);
+
+        loop {
+            if !self.in_thinking_block && !self.thinking_extracted {
+                // 查找 <thinking> 开始标签
+                if let Some(start_pos) = self.thinking_buffer.find("<thinking>") {
+                    // 发送 <thinking> 之前的内容作为 text_delta
+                    let before_thinking = self.thinking_buffer[..start_pos].to_string();
+                    if !before_thinking.is_empty() {
+                        if let Some(event) = self.create_text_delta_event(&before_thinking) {
+                            events.push(event);
+                        }
+                    }
+                    
+                    // 进入 thinking 块
+                    self.in_thinking_block = true;
+                    self.thinking_buffer = self.thinking_buffer[start_pos + "<thinking>".len()..].to_string();
+                    
+                    // 创建 thinking 块的 content_block_start 事件
+                    let thinking_index = self.state_manager.next_block_index();
+                    self.thinking_block_index = Some(thinking_index);
+                    let start_events = self.state_manager.handle_content_block_start(
+                        thinking_index,
+                        "thinking",
+                        json!({
+                            "type": "content_block_start",
+                            "index": thinking_index,
+                            "content_block": {
+                                "type": "thinking",
+                                "thinking": ""
+                            }
+                        }),
+                    );
+                    events.extend(start_events);
+                } else {
+                    // 没有找到 <thinking>，检查是否可能是部分标签
+                    // 保留可能是部分标签的内容
+                    let target_len = self.thinking_buffer.len().saturating_sub("<thinking>".len());
+                    let safe_len = find_char_boundary(&self.thinking_buffer, target_len);
+                    if safe_len > 0 {
+                        let safe_content = self.thinking_buffer[..safe_len].to_string();
+                        if !safe_content.is_empty() {
+                            if let Some(event) = self.create_text_delta_event(&safe_content) {
+                                events.push(event);
+                            }
+                        }
+                        self.thinking_buffer = self.thinking_buffer[safe_len..].to_string();
+                    }
+                    break;
+                }
+            } else if self.in_thinking_block {
+                // 在 thinking 块内，查找 </thinking> 结束标签
+                if let Some(end_pos) = self.thinking_buffer.find("</thinking>") {
+                    // 提取 thinking 内容
+                    let thinking_content = self.thinking_buffer[..end_pos].to_string();
+                    if !thinking_content.is_empty() {
+                        if let Some(thinking_index) = self.thinking_block_index {
+                            events.push(self.create_thinking_delta_event(thinking_index, &thinking_content));
+                        }
+                    }
+                    
+                    // 结束 thinking 块
+                    self.in_thinking_block = false;
+                    self.thinking_extracted = true;
+                    
+                    // 发送 content_block_stop 事件
+                    if let Some(thinking_index) = self.thinking_block_index {
+                        if let Some(stop_event) = self.state_manager.handle_content_block_stop(thinking_index) {
+                            events.push(stop_event);
+                        }
+                    }
+                    
+                    self.thinking_buffer = self.thinking_buffer[end_pos + "</thinking>".len()..].to_string();
+                } else {
+                    // 没有找到结束标签，发送当前缓冲区内容作为 thinking_delta
+                    // 保留可能是部分标签的内容
+                    let target_len = self.thinking_buffer.len().saturating_sub("</thinking>".len());
+                    let safe_len = find_char_boundary(&self.thinking_buffer, target_len);
+                    if safe_len > 0 {
+                        let safe_content = self.thinking_buffer[..safe_len].to_string();
+                        if !safe_content.is_empty() {
+                            if let Some(thinking_index) = self.thinking_block_index {
+                                events.push(self.create_thinking_delta_event(thinking_index, &safe_content));
+                            }
+                        }
+                        self.thinking_buffer = self.thinking_buffer[safe_len..].to_string();
+                    }
+                    break;
+                }
+            } else {
+                // thinking 已提取完成，剩余内容作为 text_delta
+                if !self.thinking_buffer.is_empty() {
+                    let remaining = self.thinking_buffer.clone();
+                    self.thinking_buffer.clear();
+                    if let Some(event) = self.create_text_delta_event(&remaining) {
+                        events.push(event);
+                    }
+                }
+                break;
+            }
+        }
+
+        events
+    }
+
+    /// 创建 text_delta 事件
+    fn create_text_delta_event(&mut self, text: &str) -> Option<SseEvent> {
+        self.state_manager.handle_content_block_delta(
+            0, // 文本块索引固定为 0
+            json!({
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {
+                    "type": "text_delta",
+                    "text": text
+                }
+            }),
+        )
+    }
+
+    /// 创建 thinking_delta 事件
+    fn create_thinking_delta_event(&self, index: i32, thinking: &str) -> SseEvent {
+        SseEvent::new(
+            "content_block_delta",
+            json!({
+                "type": "content_block_delta",
+                "index": index,
+                "delta": {
+                    "type": "thinking_delta",
+                    "thinking": thinking
+                }
+            }),
+        )
     }
 
     /// 处理工具使用事件

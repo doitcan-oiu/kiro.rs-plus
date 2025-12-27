@@ -10,7 +10,7 @@ use crate::kiro::model::requests::conversation::{
 };
 use crate::kiro::model::requests::tool::{InputSchema, Tool, ToolResult, ToolSpecification, ToolUseEntry};
 
-use super::types::{ContentBlock, MessagesRequest};
+use super::types::{ContentBlock, MessagesRequest, Thinking};
 
 /// 模型映射：将 Anthropic 模型名映射到 Kiro 模型 ID
 ///
@@ -266,12 +266,33 @@ fn is_unsupported_tool(name: &str) -> bool {
     matches!(name.to_lowercase().as_str(), "web_search" | "websearch")
 }
 
+/// 生成thinking标签前缀
+fn generate_thinking_prefix(thinking: &Option<Thinking>) -> Option<String> {
+    if let Some(t) = thinking {
+        if t.thinking_type == "enabled" {
+            return Some(format!(
+                "<thinking_mode>enabled</thinking_mode><max_thinking_length>{}</max_thinking_length>",
+                t.budget_tokens
+            ));
+        }
+    }
+    None
+}
+
+/// 检查内容是否已包含thinking标签
+fn has_thinking_tags(content: &str) -> bool {
+    content.contains("<thinking_mode>") || content.contains("<max_thinking_length>")
+}
+
 /// 构建历史消息
 fn build_history(
     req: &MessagesRequest,
     model_id: &str,
 ) -> Result<Vec<Message>, ConversionError> {
     let mut history = Vec::new();
+
+    // 生成thinking前缀（如果需要）
+    let thinking_prefix = generate_thinking_prefix(&req.thinking);
 
     // 1. 处理系统消息
     if let Some(ref system) = req.system {
@@ -282,13 +303,31 @@ fn build_history(
             .join("\n");
 
         if !system_content.is_empty() {
+            // 注入thinking标签到系统消息最前面（如果需要且不存在）
+            let final_content = if let Some(ref prefix) = thinking_prefix {
+                if !has_thinking_tags(&system_content) {
+                    format!("{}\n{}", prefix, system_content)
+                } else {
+                    system_content
+                }
+            } else {
+                system_content
+            };
+
             // 系统消息作为 user + assistant("OK") 配对
-            let user_msg = HistoryUserMessage::new(system_content, model_id);
+            let user_msg = HistoryUserMessage::new(final_content, model_id);
             history.push(Message::User(user_msg));
 
             let assistant_msg = HistoryAssistantMessage::new("OK");
             history.push(Message::Assistant(assistant_msg));
         }
+    } else if let Some(ref prefix) = thinking_prefix {
+        // 没有系统消息但有thinking配置，插入新的系统消息
+        let user_msg = HistoryUserMessage::new(prefix.clone(), model_id);
+        history.push(Message::User(user_msg));
+
+        let assistant_msg = HistoryAssistantMessage::new("OK");
+        history.push(Message::Assistant(assistant_msg));
     }
 
     // 2. 处理常规消息历史
@@ -471,6 +510,7 @@ mod tests {
             tool_choice: None,
             temperature: None,
             metadata: None,
+            thinking: None,
         };
         assert_eq!(determine_chat_trigger_type(&req), "MANUAL");
     }

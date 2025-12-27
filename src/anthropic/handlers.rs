@@ -149,9 +149,15 @@ pub async fn post_messages(
     // 估算输入 tokens
     let input_tokens = estimate_input_tokens_for_request(&payload);
 
+    // 检查是否启用了thinking
+    let thinking_enabled = payload.thinking
+        .as_ref()
+        .map(|t| t.thinking_type == "enabled")
+        .unwrap_or(false);
+
     if payload.stream {
         // 流式响应
-        handle_stream_request(provider, &request_body, &payload.model, input_tokens).await
+        handle_stream_request(provider, &request_body, &payload.model, input_tokens, thinking_enabled).await
     } else {
         // 非流式响应
         handle_non_stream_request(provider, &request_body, &payload.model, input_tokens).await
@@ -164,6 +170,7 @@ async fn handle_stream_request(
     request_body: &str,
     model: &str,
     input_tokens: i32,
+    thinking_enabled: bool,
 ) -> Response {
     // 调用 Kiro API
     let response = {
@@ -185,7 +192,7 @@ async fn handle_stream_request(
     };
 
     // 创建流处理上下文
-    let mut ctx = StreamContext::new(model, input_tokens);
+    let mut ctx = StreamContext::new_with_thinking(model, input_tokens, thinking_enabled);
 
     // 生成初始事件
     let initial_events = ctx.generate_initial_events();
