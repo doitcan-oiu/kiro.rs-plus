@@ -306,6 +306,9 @@ fn create_sse_stream(
     initial_stream.chain(processing_stream)
 }
 
+/// 上下文窗口大小（200k tokens）
+const CONTEXT_WINDOW_SIZE: i32 = 200_000;
+
 /// 处理非流式请求
 async fn handle_non_stream_request(
     provider: std::sync::Arc<tokio::sync::Mutex<crate::kiro::provider::KiroProvider>>,
@@ -356,6 +359,8 @@ async fn handle_non_stream_request(
     let mut tool_uses: Vec<serde_json::Value> = Vec::new();
     let mut has_tool_use = false;
     let mut stop_reason = "end_turn".to_string();
+    // 从 contextUsageEvent 计算的实际输入 tokens
+    let mut context_input_tokens: Option<i32> = None;
 
     // 收集工具调用的增量 JSON
     let mut tool_json_buffers: std::collections::HashMap<String, String> = std::collections::HashMap::new();
@@ -396,6 +401,17 @@ async fn handle_non_stream_request(
                                 }));
                             }
                         }
+                        Event::ContextUsage(context_usage) => {
+                            // 从上下文使用百分比计算实际的 input_tokens
+                            // 公式: percentage * 200000 / 100 = percentage * 2000
+                            let actual_input_tokens = (context_usage.context_usage_percentage * (CONTEXT_WINDOW_SIZE as f64) / 100.0) as i32;
+                            context_input_tokens = Some(actual_input_tokens);
+                            tracing::debug!(
+                                "收到 contextUsageEvent: {}%, 计算 input_tokens: {}",
+                                context_usage.context_usage_percentage,
+                                actual_input_tokens
+                            );
+                        }
                         Event::Exception { exception_type, .. } => {
                             if exception_type == "ContentLengthExceededException" {
                                 stop_reason = "max_tokens".to_string();
@@ -431,6 +447,9 @@ async fn handle_non_stream_request(
     // 估算输出 tokens
     let output_tokens = token::estimate_output_tokens(&content);
 
+    // 使用从 contextUsageEvent 计算的 input_tokens，如果没有则使用估算值
+    let final_input_tokens = context_input_tokens.unwrap_or(input_tokens);
+
     // 构建 Anthropic 响应
     let response_body = json!({
         "id": format!("msg_{}", Uuid::new_v4().to_string().replace('-', "")),
@@ -441,7 +460,7 @@ async fn handle_non_stream_request(
         "stop_reason": stop_reason,
         "stop_sequence": null,
         "usage": {
-            "input_tokens": input_tokens,
+            "input_tokens": final_input_tokens,
             "output_tokens": output_tokens
         }
     });

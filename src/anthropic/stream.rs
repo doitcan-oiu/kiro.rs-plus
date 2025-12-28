@@ -351,7 +351,7 @@ impl SseStateManager {
     }
 
     /// 生成最终事件序列
-    pub fn generate_final_events(&mut self, output_tokens: i32) -> Vec<SseEvent> {
+    pub fn generate_final_events(&mut self, input_tokens: i32) -> Vec<SseEvent> {
         let mut events = Vec::new();
 
         // 关闭所有未关闭的块
@@ -380,7 +380,8 @@ impl SseStateManager {
                         "stop_sequence": null
                     },
                     "usage": {
-                        "output_tokens": output_tokens
+                        "input_tokens": input_tokens,
+                        "output_tokens": 1
                     }
                 }),
             ));
@@ -399,6 +400,9 @@ impl SseStateManager {
     }
 }
 
+/// 上下文窗口大小（200k tokens）
+const CONTEXT_WINDOW_SIZE: i32 = 200_000;
+
 /// 流处理上下文
 pub struct StreamContext {
     /// SSE 状态管理器
@@ -407,8 +411,10 @@ pub struct StreamContext {
     pub model: String,
     /// 消息 ID
     pub message_id: String,
-    /// 输入 tokens
+    /// 输入 tokens（估算值）
     pub input_tokens: i32,
+    /// 从 contextUsageEvent 计算的实际输入 tokens
+    pub context_input_tokens: Option<i32>,
     /// 输出 tokens 累计
     pub output_tokens: i32,
     /// 工具块索引映射 (tool_id -> block_index)
@@ -435,6 +441,7 @@ impl StreamContext {
             model: model.into(),
             message_id: format!("msg_{}", Uuid::new_v4().to_string().replace('-', "")),
             input_tokens,
+            context_input_tokens: None,
             output_tokens: 0,
             tool_block_indices: HashMap::new(),
             thinking_enabled,
@@ -513,6 +520,18 @@ impl StreamContext {
             }
             Event::ToolUse(tool_use) => {
                 self.process_tool_use(tool_use)
+            }
+            Event::ContextUsage(context_usage) => {
+                // 从上下文使用百分比计算实际的 input_tokens
+                // 公式: percentage * 200000 / 100 = percentage * 2000
+                let actual_input_tokens = (context_usage.context_usage_percentage * (CONTEXT_WINDOW_SIZE as f64) / 100.0) as i32;
+                self.context_input_tokens = Some(actual_input_tokens);
+                tracing::debug!(
+                    "收到 contextUsageEvent: {}%, 计算 input_tokens: {}",
+                    context_usage.context_usage_percentage,
+                    actual_input_tokens
+                );
+                Vec::new()
             }
             Event::Error { error_code, error_message } => {
                 tracing::error!("收到错误事件: {} - {}", error_code, error_message);
@@ -823,8 +842,11 @@ impl StreamContext {
             self.thinking_buffer.clear();
         }
 
+        // 使用从 contextUsageEvent 计算的 input_tokens，如果没有则使用估算值
+        let final_input_tokens = self.context_input_tokens.unwrap_or(self.input_tokens);
+
         // 生成最终事件
-        events.extend(self.state_manager.generate_final_events(self.output_tokens));
+        events.extend(self.state_manager.generate_final_events(final_input_tokens));
         events
     }
 }
