@@ -102,6 +102,11 @@ impl CredentialsConfig {
             CredentialsConfig::Multiple(creds) => creds.is_empty(),
         }
     }
+
+    /// 判断是否为多凭据格式（数组格式）
+    pub fn is_multiple(&self) -> bool {
+        matches!(self, CredentialsConfig::Multiple(_))
+    }
 }
 
 impl KiroCredentials {

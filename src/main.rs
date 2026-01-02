@@ -40,6 +40,9 @@ async fn main() {
         std::process::exit(1);
     });
 
+    // 判断是否为多凭据格式（用于刷新后回写）
+    let is_multiple_format = credentials_config.is_multiple();
+
     // 转换为按优先级排序的凭据列表
     let credentials_list = credentials_config.into_sorted_credentials();
     tracing::info!("已加载 {} 个凭据配置", credentials_list.len());
@@ -68,11 +71,17 @@ async fn main() {
     }
 
     // 创建 MultiTokenManager 和 KiroProvider
-    let token_manager = MultiTokenManager::new(config.clone(), credentials_list, proxy_config.clone())
-        .unwrap_or_else(|e| {
-            tracing::error!("创建 Token 管理器失败: {}", e);
-            std::process::exit(1);
-        });
+    let token_manager = MultiTokenManager::new(
+        config.clone(),
+        credentials_list,
+        proxy_config.clone(),
+        Some(credentials_path.into()),
+        is_multiple_format,
+    )
+    .unwrap_or_else(|e| {
+        tracing::error!("创建 Token 管理器失败: {}", e);
+        std::process::exit(1);
+    });
     let token_manager = Arc::new(token_manager);
     let kiro_provider = KiroProvider::with_proxy(token_manager.clone(), proxy_config.clone());
 

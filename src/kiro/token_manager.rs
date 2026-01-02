@@ -8,6 +8,8 @@ use chrono::{DateTime, Duration, Utc};
 use parking_lot::Mutex;
 use tokio::sync::Mutex as TokioMutex;
 
+use std::path::PathBuf;
+
 use crate::http_client::{build_client, ProxyConfig};
 use crate::kiro::machine_id;
 use crate::kiro::model::credentials::KiroCredentials;
@@ -385,6 +387,10 @@ pub struct MultiTokenManager {
     current_index: Mutex<usize>,
     /// Token 刷新锁，确保同一时间只有一个刷新操作
     refresh_lock: TokioMutex<()>,
+    /// 凭据文件路径（用于回写）
+    credentials_path: Option<PathBuf>,
+    /// 是否为多凭据格式（数组格式才回写）
+    is_multiple_format: bool,
 }
 
 /// 每个凭据最大 API 调用失败次数
@@ -411,10 +417,14 @@ impl MultiTokenManager {
     /// * `config` - 应用配置
     /// * `credentials` - 按优先级排序的凭据列表
     /// * `proxy` - 可选的代理配置
+    /// * `credentials_path` - 凭据文件路径（用于回写）
+    /// * `is_multiple_format` - 是否为多凭据格式（数组格式才回写）
     pub fn new(
         config: Config,
         credentials: Vec<KiroCredentials>,
         proxy: Option<ProxyConfig>,
+        credentials_path: Option<PathBuf>,
+        is_multiple_format: bool,
     ) -> anyhow::Result<Self> {
         if credentials.is_empty() {
             anyhow::bail!("至少需要一个凭据");
@@ -435,6 +445,8 @@ impl MultiTokenManager {
             entries: Mutex::new(entries),
             current_index: Mutex::new(0),
             refresh_lock: TokioMutex::new(()),
+            credentials_path,
+            is_multiple_format,
         })
     }
 
@@ -559,8 +571,14 @@ impl MultiTokenManager {
                 }
 
                 // 更新凭据
-                let mut entries = self.entries.lock();
-                entries[index].credentials = new_creds.clone();
+                {
+                    let mut entries = self.entries.lock();
+                    entries[index].credentials = new_creds.clone();
+                }
+
+                // 回写凭据到文件（仅多凭据格式）
+                self.persist_credentials();
+
                 new_creds
             } else {
                 // 其他请求已经完成刷新，直接使用新凭据
@@ -581,6 +599,45 @@ impl MultiTokenManager {
             credentials: creds,
             token,
         })
+    }
+
+    /// 将凭据列表回写到源文件
+    ///
+    /// 仅在以下条件满足时回写：
+    /// - 源文件是多凭据格式（数组）
+    /// - credentials_path 已设置
+    fn persist_credentials(&self) {
+        // 仅多凭据格式才回写
+        if !self.is_multiple_format {
+            return;
+        }
+
+        let path = match &self.credentials_path {
+            Some(p) => p,
+            None => return,
+        };
+
+        // 收集所有凭据
+        let credentials: Vec<KiroCredentials> = {
+            let entries = self.entries.lock();
+            entries.iter().map(|e| e.credentials.clone()).collect()
+        };
+
+        // 序列化为 pretty JSON
+        let json = match serde_json::to_string_pretty(&credentials) {
+            Ok(j) => j,
+            Err(e) => {
+                tracing::error!("序列化凭据失败: {}", e);
+                return;
+            }
+        };
+
+        // 写入文件
+        if let Err(e) = std::fs::write(path, json) {
+            tracing::error!("回写凭据文件失败: {}", e);
+        } else {
+            tracing::debug!("已回写凭据到文件: {:?}", path);
+        }
     }
 
     /// 报告指定凭据 API 调用成功
@@ -771,7 +828,7 @@ mod tests {
         let mut cred2 = KiroCredentials::default();
         cred2.priority = 1;
 
-        let manager = MultiTokenManager::new(config, vec![cred1, cred2], None).unwrap();
+        let manager = MultiTokenManager::new(config, vec![cred1, cred2], None, None, false).unwrap();
         assert_eq!(manager.total_count(), 2);
         assert_eq!(manager.available_count(), 2);
     }
@@ -779,7 +836,7 @@ mod tests {
     #[test]
     fn test_multi_token_manager_empty_credentials() {
         let config = Config::default();
-        let result = MultiTokenManager::new(config, vec![], None);
+        let result = MultiTokenManager::new(config, vec![], None, None, false);
         assert!(result.is_err());
     }
 
@@ -789,7 +846,7 @@ mod tests {
         let cred1 = KiroCredentials::default();
         let cred2 = KiroCredentials::default();
 
-        let manager = MultiTokenManager::new(config, vec![cred1, cred2], None).unwrap();
+        let manager = MultiTokenManager::new(config, vec![cred1, cred2], None, None, false).unwrap();
 
         // 前两次失败不会禁用（使用 index 0）
         assert!(manager.report_failure(0));
@@ -812,7 +869,7 @@ mod tests {
         let config = Config::default();
         let cred = KiroCredentials::default();
 
-        let manager = MultiTokenManager::new(config, vec![cred], None).unwrap();
+        let manager = MultiTokenManager::new(config, vec![cred], None, None, false).unwrap();
 
         // 失败两次（使用 index 0）
         manager.report_failure(0);
@@ -835,7 +892,7 @@ mod tests {
         let mut cred2 = KiroCredentials::default();
         cred2.refresh_token = Some("token2".to_string());
 
-        let manager = MultiTokenManager::new(config, vec![cred1, cred2], None).unwrap();
+        let manager = MultiTokenManager::new(config, vec![cred1, cred2], None, None, false).unwrap();
 
         // 初始是第一个凭据
         assert_eq!(

@@ -268,7 +268,7 @@ mod tests {
     use crate::model::config::Config;
 
     fn create_test_provider(config: Config, credentials: KiroCredentials) -> KiroProvider {
-        let tm = MultiTokenManager::new(config, vec![credentials], None).unwrap();
+        let tm = MultiTokenManager::new(config, vec![credentials], None, None, false).unwrap();
         KiroProvider::new(Arc::new(tm))
     }
 
