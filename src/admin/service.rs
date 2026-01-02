@@ -47,9 +47,13 @@ impl AdminService {
 
     /// 设置凭据禁用状态
     pub fn set_disabled(&self, index: usize, disabled: bool) -> anyhow::Result<()> {
+        // 先获取当前凭据索引，用于判断是否需要切换
+        let current_index = self.token_manager.snapshot().current_index;
+
         self.token_manager.set_disabled(index, disabled)?;
-        // 如果禁用当前凭据，尝试切换到下一个
-        if disabled {
+
+        // 只有禁用的是当前凭据时才尝试切换到下一个
+        if disabled && index == current_index {
             let _ = self.token_manager.switch_to_next();
         }
         Ok(())
