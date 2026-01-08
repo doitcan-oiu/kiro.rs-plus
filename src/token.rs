@@ -8,7 +8,7 @@
 //! - 4 个字符单位 = 1 token（四舍五入）
 
 use crate::anthropic::types::{CountTokensRequest, CountTokensResponse, Message, SystemMessage};
-use crate::http_client::{build_client, ProxyConfig};
+use crate::http_client::{ProxyConfig, build_client};
 use std::sync::OnceLock;
 
 /// Count Tokens API 配置

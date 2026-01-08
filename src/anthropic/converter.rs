@@ -329,13 +329,17 @@ fn convert_tools(tools: &Option<Vec<serde_json::Value>>) -> Vec<Tool> {
             let input_schema = match t.get("input_schema") {
                 Some(schema) => schema,
                 None => {
-                    tracing::debug!("跳过工具 '{}': 缺少 input_schema（可能是特殊工具如 WebSearchTool）", name);
+                    tracing::debug!(
+                        "跳过工具 '{}': 缺少 input_schema（可能是特殊工具如 WebSearchTool）",
+                        name
+                    );
                     return None;
                 }
             };
 
             // 获取描述（可选）
-            let description = t.get("description")
+            let description = t
+                .get("description")
                 .and_then(|d| d.as_str())
                 .unwrap_or_default()
                 .to_string();

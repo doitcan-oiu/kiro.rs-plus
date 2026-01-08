@@ -240,8 +240,14 @@ mod tests {
         // 验证 tools（包含普通 Tool 和 WebSearchTool）
         let tools = req.tools.expect("应该有 tools");
         assert_eq!(tools.len(), 2);
-        assert_eq!(tools[0].get("name").unwrap().as_str().unwrap(), "get_weather");
-        assert_eq!(tools[1].get("type").unwrap().as_str().unwrap(), "web_search_20250305");
+        assert_eq!(
+            tools[0].get("name").unwrap().as_str().unwrap(),
+            "get_weather"
+        );
+        assert_eq!(
+            tools[1].get("type").unwrap().as_str().unwrap(),
+            "web_search_20250305"
+        );
     }
 
     /// 测试 max_tokens 缺失时使用默认值
@@ -349,5 +355,282 @@ mod tests {
         let req: MessagesRequest = serde_json::from_str(json).unwrap();
         let thinking = req.thinking.unwrap();
         assert_eq!(thinking.budget_tokens, 24576); // MAX_BUDGET_TOKENS
+    }
+
+    // ==================== new-api 兼容性测试 ====================
+
+    /// 测试 new-api 转换后的 tool_result 格式
+    /// new-api 将 OpenAI 的 role:"tool" 转换为 role:"user" + tool_result content block
+    #[test]
+    fn test_new_api_tool_result_format() {
+        let json = r#"{
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [
+                {"role": "user", "content": "What's the weather?"},
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": "Let me check the weather."},
+                    {"type": "tool_use", "id": "toolu_01ABC", "name": "get_weather", "input": {"location": "Tokyo"}}
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_01ABC", "content": "Sunny, 25°C"}
+                ]}
+            ]
+        }"#;
+
+        let req: MessagesRequest = serde_json::from_str(json).expect("应该能解析 tool_result 格式");
+        assert_eq!(req.messages.len(), 3);
+
+        // 验证 assistant 消息包含 tool_use
+        let assistant_content = req.messages[1].content.as_array().unwrap();
+        assert_eq!(assistant_content.len(), 2);
+        assert_eq!(assistant_content[1].get("type").unwrap(), "tool_use");
+        assert_eq!(assistant_content[1].get("id").unwrap(), "toolu_01ABC");
+        assert_eq!(assistant_content[1].get("name").unwrap(), "get_weather");
+
+        // 验证 user 消息包含 tool_result
+        let user_content = req.messages[2].content.as_array().unwrap();
+        assert_eq!(user_content[0].get("type").unwrap(), "tool_result");
+        assert_eq!(user_content[0].get("tool_use_id").unwrap(), "toolu_01ABC");
+    }
+
+    /// 测试 new-api 转换后的占位符消息 "..."
+    /// new-api 会将空 content 替换为 "..."，首条非 user 消息前也会插入 "..."
+    #[test]
+    fn test_new_api_placeholder_content() {
+        let json = r#"{
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [
+                {"role": "user", "content": "..."},
+                {"role": "assistant", "content": "Hello!"}
+            ]
+        }"#;
+
+        let req: MessagesRequest = serde_json::from_str(json).expect("应该能解析占位符消息");
+        assert_eq!(req.messages[0].content.as_str().unwrap(), "...");
+    }
+
+    /// 测试 new-api 转换后的 tool_choice 格式
+    #[test]
+    fn test_new_api_tool_choice_formats() {
+        // auto 格式
+        let json_auto = r#"{
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [{"name": "test", "input_schema": {"type": "object"}}],
+            "tool_choice": {"type": "auto"}
+        }"#;
+        let req: MessagesRequest = serde_json::from_str(json_auto).unwrap();
+        assert_eq!(req.tool_choice.unwrap().get("type").unwrap(), "auto");
+
+        // any 格式 (OpenAI "required" 转换而来)
+        let json_any = r#"{
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [{"name": "test", "input_schema": {"type": "object"}}],
+            "tool_choice": {"type": "any"}
+        }"#;
+        let req: MessagesRequest = serde_json::from_str(json_any).unwrap();
+        assert_eq!(req.tool_choice.unwrap().get("type").unwrap(), "any");
+
+        // tool 格式 (指定具体工具)
+        let json_tool = r#"{
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [{"name": "get_weather", "input_schema": {"type": "object"}}],
+            "tool_choice": {"type": "tool", "name": "get_weather"}
+        }"#;
+        let req: MessagesRequest = serde_json::from_str(json_tool).unwrap();
+        let tool_choice = req.tool_choice.unwrap();
+        assert_eq!(tool_choice.get("type").unwrap(), "tool");
+        assert_eq!(tool_choice.get("name").unwrap(), "get_weather");
+    }
+
+    /// 测试 new-api 转换后的 tool_choice 带 disable_parallel_tool_use
+    #[test]
+    fn test_new_api_tool_choice_parallel_disabled() {
+        let json = r#"{
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [{"name": "test", "input_schema": {"type": "object"}}],
+            "tool_choice": {"type": "auto", "disable_parallel_tool_use": true}
+        }"#;
+
+        let req: MessagesRequest = serde_json::from_str(json).unwrap();
+        let tool_choice = req.tool_choice.unwrap();
+        assert_eq!(tool_choice.get("disable_parallel_tool_use").unwrap(), true);
+    }
+
+    /// 测试 new-api 转换后的多个 tool_result 合并到同一 user 消息
+    #[test]
+    fn test_new_api_multiple_tool_results_merged() {
+        let json = r#"{
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [
+                {"role": "user", "content": "Check weather and time"},
+                {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "toolu_weather", "name": "get_weather", "input": {}},
+                    {"type": "tool_use", "id": "toolu_time", "name": "get_time", "input": {}}
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_weather", "content": "Sunny"},
+                    {"type": "tool_result", "tool_use_id": "toolu_time", "content": "10:00 AM"}
+                ]}
+            ]
+        }"#;
+
+        let req: MessagesRequest = serde_json::from_str(json).expect("应该能解析多个 tool_result");
+
+        // 验证多个 tool_result 在同一个 user 消息中
+        let user_content = req.messages[2].content.as_array().unwrap();
+        assert_eq!(user_content.len(), 2);
+        assert_eq!(user_content[0].get("tool_use_id").unwrap(), "toolu_weather");
+        assert_eq!(user_content[1].get("tool_use_id").unwrap(), "toolu_time");
+    }
+
+    /// 测试 new-api 转换后的 tool_result 带 is_error 标记
+    #[test]
+    fn test_new_api_tool_result_with_error() {
+        let json = r#"{
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [
+                {"role": "user", "content": "Do something"},
+                {"role": "assistant", "content": [
+                    {"type": "tool_use", "id": "toolu_01", "name": "risky_action", "input": {}}
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_01", "content": "Error: Permission denied", "is_error": true}
+                ]}
+            ]
+        }"#;
+
+        let req: MessagesRequest =
+            serde_json::from_str(json).expect("应该能解析带错误的 tool_result");
+        let user_content = req.messages[2].content.as_array().unwrap();
+        assert_eq!(user_content[0].get("is_error").unwrap(), true);
+    }
+
+    /// 测试 new-api 转换后的图片消息格式 (base64)
+    #[test]
+    fn test_new_api_image_base64_format() {
+        let json = r#"{
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What's in this image?"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": "/9j/4AAQSkZJRg..."
+                        }
+                    }
+                ]
+            }]
+        }"#;
+
+        let req: MessagesRequest = serde_json::from_str(json).expect("应该能解析图片消息");
+        let content = req.messages[0].content.as_array().unwrap();
+        assert_eq!(content.len(), 2);
+
+        let image_block = &content[1];
+        assert_eq!(image_block.get("type").unwrap(), "image");
+        let source = image_block.get("source").unwrap();
+        assert_eq!(source.get("type").unwrap(), "base64");
+        assert_eq!(source.get("media_type").unwrap(), "image/jpeg");
+    }
+
+    /// 测试 new-api 转换后的 metadata 字段
+    #[test]
+    fn test_new_api_metadata_field() {
+        let json = r#"{
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "metadata": {
+                "user_id": "user_abc123_account__session_0b4445e1-f5be-49e1-87ce-62bbc28ad705"
+            }
+        }"#;
+
+        let req: MessagesRequest = serde_json::from_str(json).expect("应该能解析 metadata");
+        let metadata = req.metadata.unwrap();
+        assert!(metadata.user_id.unwrap().starts_with("user_"));
+    }
+
+    /// 测试 new-api 转换后的完整多轮对话（包含工具调用）
+    #[test]
+    fn test_new_api_full_conversation_with_tools() {
+        let json = r#"{
+            "model": "claude-sonnet-4-5-20250929",
+            "max_tokens": 8192,
+            "system": [
+                {"type": "text", "text": "You are a helpful assistant with access to tools."}
+            ],
+            "messages": [
+                {"role": "user", "content": "What's the weather in Tokyo?"},
+                {"role": "assistant", "content": [
+                    {"type": "text", "text": "I'll check the weather for you."},
+                    {"type": "tool_use", "id": "toolu_01XYZ", "name": "get_weather", "input": {"location": "Tokyo", "unit": "celsius"}}
+                ]},
+                {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_01XYZ", "content": "{\"temperature\": 22, \"condition\": \"Partly cloudy\"}"}
+                ]},
+                {"role": "assistant", "content": "The weather in Tokyo is 22°C and partly cloudy."},
+                {"role": "user", "content": "Thanks!"}
+            ],
+            "tools": [
+                {
+                    "name": "get_weather",
+                    "description": "Get current weather for a location",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "location": {"type": "string", "description": "City name"},
+                            "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]}
+                        },
+                        "required": ["location"]
+                    }
+                }
+            ],
+            "stream": true
+        }"#;
+
+        let req: MessagesRequest = serde_json::from_str(json).expect("应该能解析完整对话");
+
+        // 验证基本字段
+        assert_eq!(req.model, "claude-sonnet-4-5-20250929");
+        assert_eq!(req.max_tokens, 8192);
+        assert!(req.stream);
+
+        // 验证消息数量和角色交替
+        assert_eq!(req.messages.len(), 5);
+        assert_eq!(req.messages[0].role, "user");
+        assert_eq!(req.messages[1].role, "assistant");
+        assert_eq!(req.messages[2].role, "user"); // tool_result
+        assert_eq!(req.messages[3].role, "assistant");
+        assert_eq!(req.messages[4].role, "user");
+
+        // 验证 tool_use 中的 input 是对象而非字符串
+        let assistant_content = req.messages[1].content.as_array().unwrap();
+        let tool_use = &assistant_content[1];
+        let input = tool_use.get("input").unwrap();
+        assert!(input.is_object());
+        assert_eq!(input.get("location").unwrap(), "Tokyo");
+    }
+
+    /// 测试 new-api 转换后的 stop_sequences 格式
+    #[test]
+    fn test_new_api_stop_sequences() {
+        let json = r#"{
+            "model": "claude-sonnet-4-5-20250929",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stop_sequences": ["Human:", "Assistant:"]
+        }"#;
+
+        // 注意：当前 MessagesRequest 可能没有 stop_sequences 字段
+        // 如果需要支持，需要添加该字段
+        let result: Result<MessagesRequest, _> = serde_json::from_str(json);
+        // 即使没有该字段，serde 默认会忽略未知字段，不会报错
+        assert!(result.is_ok());
     }
 }
