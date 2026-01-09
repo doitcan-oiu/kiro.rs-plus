@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+- 调整重试策略：单凭据最大重试次数 3→2，单请求最大重试次数 9→5
+  - `MAX_RETRIES_PER_CREDENTIAL`: 3 → 2
+  - `MAX_TOTAL_RETRIES`: 9 → 5
+  - `MAX_FAILURES_PER_CREDENTIAL`: 3 → 2
+  - 减少无效凭据的重试开销，加快故障转移速度
+
 ### Added
 - 新增用户亲和性绑定功能：连续对话优先使用同一凭据（基于 `metadata.user_id`）
   - 新增 `src/kiro/affinity.rs` 模块，实现 `UserAffinityManager`

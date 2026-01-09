@@ -14,10 +14,10 @@ use crate::kiro::machine_id;
 use crate::kiro::token_manager::{CallContext, MultiTokenManager};
 
 /// 每个凭据的最大重试次数
-const MAX_RETRIES_PER_CREDENTIAL: usize = 3;
+const MAX_RETRIES_PER_CREDENTIAL: usize = 2;
 
 /// 总重试次数硬上限（避免无限重试）
-const MAX_TOTAL_RETRIES: usize = 9;
+const MAX_TOTAL_RETRIES: usize = 5;
 
 /// Kiro API Provider
 ///
@@ -182,7 +182,7 @@ impl KiroProvider {
     /// 重试策略：
     /// - 每个凭据最多重试 MAX_RETRIES_PER_CREDENTIAL 次
     /// - 总重试次数 = min(凭据数量 × 每凭据重试次数, MAX_TOTAL_RETRIES)
-    /// - 硬上限 9 次，避免无限重试
+    /// - 硬上限 5 次，避免无限重试
     async fn call_api_with_retry(
         &self,
         request_body: &str,

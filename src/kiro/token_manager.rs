@@ -486,7 +486,7 @@ pub struct MultiTokenManager {
 }
 
 /// 每个凭据最大 API 调用失败次数
-const MAX_FAILURES_PER_CREDENTIAL: u32 = 3;
+const MAX_FAILURES_PER_CREDENTIAL: u32 = 2;
 
 /// MODEL_TEMPORARILY_UNAVAILABLE 触发全局禁用的阈值
 const MODEL_UNAVAILABLE_THRESHOLD: u32 = 2;
