@@ -43,7 +43,19 @@ impl ProxyConfig {
 /// # Returns
 /// 配置好的 reqwest::Client
 pub fn build_client(proxy: Option<&ProxyConfig>, timeout_secs: u64) -> anyhow::Result<Client> {
-    let mut builder = Client::builder().timeout(Duration::from_secs(timeout_secs));
+    let mut builder = Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        // TCP keepalive 配置，防止长上下文场景下连接被中间设备（NAT/防火墙）静默关闭
+        .tcp_keepalive(Duration::from_secs(15))
+        // 连接池空闲超时
+        .pool_idle_timeout(Duration::from_secs(90));
+
+    // tcp_user_timeout 仅在 Linux/Android/Fuchsia 上可用
+    // 控制发送数据后等待 ACK 的最大时间，超时后强制关闭连接
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "fuchsia"))]
+    {
+        builder = builder.tcp_user_timeout(Duration::from_secs(60));
+    }
 
     if let Some(proxy_config) = proxy {
         let mut proxy = Proxy::all(&proxy_config.url)?;
