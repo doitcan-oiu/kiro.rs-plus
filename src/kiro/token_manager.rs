@@ -567,12 +567,10 @@ pub struct MultiTokenManager {
 const MAX_FAILURES_PER_CREDENTIAL: u32 = 2;
 
 /// MODEL_TEMPORARILY_UNAVAILABLE 触发全局禁用的阈值
-#[allow(dead_code)]
 const MODEL_UNAVAILABLE_THRESHOLD: u32 = 2;
 
 /// 全局禁用恢复时间（分钟）
-#[allow(dead_code)]
-const GLOBAL_DISABLE_RECOVERY_MINUTES: i64 = 10;
+const GLOBAL_DISABLE_RECOVERY_MINUTES: i64 = 5;
 
 /// API 调用上下文
 ///
@@ -1232,7 +1230,7 @@ impl MultiTokenManager {
 
     /// 报告 MODEL_TEMPORARILY_UNAVAILABLE 错误
     ///
-    /// 累计达到阈值后禁用所有凭据，10分钟后自动恢复
+    /// 累计达到阈值后禁用所有凭据，5分钟后自动恢复
     /// 返回是否触发了全局禁用
     pub fn report_model_unavailable(&self) -> bool {
         let count = self.model_unavailable_count.fetch_add(1, Ordering::SeqCst) + 1;

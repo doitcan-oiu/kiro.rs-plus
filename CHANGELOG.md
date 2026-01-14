@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Changed
+- 调整全局禁用恢复时间：`GLOBAL_DISABLE_RECOVERY_MINUTES` 从 10 分钟降至 5 分钟
+  - 加快模型暂时不可用后的自动恢复速度
 - 调整总重试次数硬上限：`MAX_TOTAL_RETRIES` 从 5 降至 3
   - 进一步减少无效重试开销，加快故障转移速度
 
@@ -157,7 +159,7 @@
 - 成功请求时自动重置 `MODEL_TEMPORARILY_UNAVAILABLE` 计数器，避免跨时间累计触发
 - 新增 `MODEL_TEMPORARILY_UNAVAILABLE` 错误检测和全局禁用机制
   - 当该 500 错误发生 2 次时，自动禁用所有凭据
-  - 10 分钟后自动恢复（余额不足的凭据除外）
+  - 5 分钟后自动恢复（余额不足的凭据除外）
 - `CredentialEntrySnapshot` 新增 `disable_reason` 字段，支持查询禁用原因
 - 新增自动余额刷新：成功请求后自动在后台刷新余额缓存（基于动态 TTL 策略）
   - 新增 `spawn_balance_refresh()` 方法，使用 `tokio::spawn` 异步刷新
