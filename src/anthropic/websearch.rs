@@ -120,6 +120,7 @@ pub fn has_web_search_tool(req: &MessagesRequest) -> bool {
 /// 检查请求是否包含 WebSearch 工具（不限制工具数量）
 ///
 /// 用于判断是否需要特殊处理 web_search 工具
+#[allow(dead_code)]
 pub fn contains_web_search_tool(req: &MessagesRequest) -> bool {
     req.tools.as_ref().is_some_and(|tools| {
         tools.iter().any(|t| {

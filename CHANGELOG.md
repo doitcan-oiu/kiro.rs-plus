@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+- 新增请求体大小限制：50MB（`DefaultBodyLimit::max(50 * 1024 * 1024)`）
+  - 涉及文件：`src/anthropic/router.rs`
+
 ### Changed
 - 调整全局禁用恢复时间：`GLOBAL_DISABLE_RECOVERY_MINUTES` 从 10 分钟降至 5 分钟
   - 加快模型暂时不可用后的自动恢复速度
