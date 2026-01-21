@@ -107,9 +107,9 @@ pub struct WebSearchResult {
 /// 条件：tools 中包含 name 为 web_search 的工具，且只有这一个工具
 /// 如果有多个工具，则不走 WebSearch 专用处理（由正常流程处理）
 pub fn has_web_search_tool(req: &MessagesRequest) -> bool {
-    req.tools.as_ref().is_some_and(|tools| {
-        tools.len() == 1 && tools.iter().any(|t| t.name == "web_search")
-    })
+    req.tools
+        .as_ref()
+        .is_some_and(|tools| tools.len() == 1 && tools.iter().any(|t| t.name == "web_search"))
 }
 
 /// 检查请求是否包含 WebSearch 工具（不限制工具数量）
@@ -117,9 +117,9 @@ pub fn has_web_search_tool(req: &MessagesRequest) -> bool {
 /// 用于判断是否需要特殊处理 web_search 工具
 #[allow(dead_code)]
 pub fn contains_web_search_tool(req: &MessagesRequest) -> bool {
-    req.tools.as_ref().is_some_and(|tools| {
-        tools.iter().any(|t| t.name == "web_search")
-    })
+    req.tools
+        .as_ref()
+        .is_some_and(|tools| tools.iter().any(|t| t.name == "web_search"))
 }
 
 /// 从消息中提取搜索查询
@@ -252,9 +252,8 @@ fn generate_websearch_events(
     let mut events = Vec::new();
     let message_id = format!(
         "msg_{}",
-        Uuid::new_v4().to_string().replace('-', "")[..24].to_string()
+        &Uuid::new_v4().to_string().replace('-', "")[..24].to_string()
     );
-
 
     // 1. message_start
     events.push(SseEvent::new(
@@ -491,18 +490,36 @@ pub async fn handle_websearch_request(
         }
     };
 
-    // 4. 生成 SSE 响应
-    let model = payload.model.clone();
-    let stream =
-        create_websearch_sse_stream(model, query, tool_use_id, search_results, input_tokens);
+    // 4. 根据 stream 参数决定响应格式
+    if payload.stream {
+        // SSE 流式响应
+        let model = payload.model.clone();
+        let stream = create_websearch_sse_stream(
+            model,
+            query,
+            tool_use_id,
+            search_results,
+            input_tokens,
+        );
 
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .header(header::CACHE_CONTROL, "no-cache")
-        .header(header::CONNECTION, "keep-alive")
-        .body(Body::from_stream(stream))
-        .unwrap()
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/event-stream")
+            .header(header::CACHE_CONTROL, "no-cache")
+            .header(header::CONNECTION, "keep-alive")
+            .body(Body::from_stream(stream))
+            .unwrap()
+    } else {
+        // JSON 非流式响应
+        let json_response = create_websearch_json_response(
+            &payload.model,
+            &query,
+            &tool_use_id,
+            search_results,
+            input_tokens,
+        );
+        (StatusCode::OK, Json(json_response)).into_response()
+    }
 }
 
 /// 创建 WebSearch JSON 响应（非流式）

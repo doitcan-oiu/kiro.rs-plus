@@ -76,6 +76,7 @@ fn is_non_western_char(c: char) -> bool {
 /// - 西文字符：每个计 1 个字符单位
 /// - 4 个字符单位 = 1 token（四舍五入）
 /// ```
+#[allow(clippy::let_and_return)]
 pub fn count_tokens(text: &str) -> u64 {
     // println!("text: {}", text);
 
@@ -105,6 +106,7 @@ pub fn count_tokens(text: &str) -> u64 {
 /// 估算请求的输入 tokens
 ///
 /// 优先调用远程 API，失败时回退到本地计算
+#[allow(clippy::collapsible_if)]
 pub(crate) fn count_all_tokens(
     model: String,
     system: Option<Vec<SystemMessage>>,
@@ -143,15 +145,15 @@ async fn call_remote_count_tokens(
     config: &CountTokensConfig,
     model: String,
     system: &Option<Vec<SystemMessage>>,
-    messages: &Vec<Message>,
+    messages: &[Message],
     tools: &Option<Vec<Tool>>,
 ) -> Result<u64, Box<dyn std::error::Error + Send + Sync>> {
     let client = build_client(config.proxy.as_ref(), 300, config.tls_backend)?;
 
     // 构建请求体
     let request = CountTokensRequest {
-        model: model, // 模型名称用于 token 计算
-        messages: messages.clone(),
+        model, // 模型名称用于 token 计算
+        messages: messages.to_vec(),
         system: system.clone(),
         tools: tools.clone(),
     };

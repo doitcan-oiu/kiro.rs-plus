@@ -104,6 +104,7 @@ pub struct MessagesRequest {
     #[serde(default, deserialize_with = "deserialize_system")]
     pub system: Option<Vec<SystemMessage>>,
     pub tools: Option<Vec<Tool>>,
+    #[allow(dead_code)]
     pub tool_choice: Option<serde_json::Value>,
     pub thinking: Option<Thinking>,
     /// Claude Code 请求中的 metadata，包含 session 信息
@@ -115,8 +116,6 @@ fn deserialize_system<'de, D>(deserializer: D) -> Result<Option<Vec<SystemMessag
 where
     D: serde::Deserializer<'de>,
 {
-    use serde::de::Error;
-
     // 创建一个 visitor 来处理 string 或 array
     struct SystemVisitor;
 
@@ -193,8 +192,7 @@ pub struct Tool {
     /// 工具类型，如 "web_search_20250305"（可选，仅 WebSearch 工具）
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub tool_type: Option<String>,
-    /// 工具名称
-    #[serde(default)]
+    /// 工具名称（必需）
     pub name: String,
     /// 工具描述（普通工具必需，WebSearch 工具可选）
     #[serde(default)]
@@ -209,6 +207,7 @@ pub struct Tool {
 
 impl Tool {
     /// 检查是否为 WebSearch 工具
+    #[allow(dead_code)]
     pub fn is_web_search(&self) -> bool {
         self.tool_type
             .as_ref()

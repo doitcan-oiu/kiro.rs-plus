@@ -405,7 +405,6 @@ fn convert_tools(tools: &Option<Vec<AnthropicTool>>) -> Vec<KiroTool> {
         .collect()
 }
 
-
 /// 生成thinking标签前缀
 fn generate_thinking_prefix(thinking: &Option<Thinking>) -> Option<String> {
     if let Some(t) = thinking
