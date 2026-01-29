@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Fixed
+- 修复日志截断在多字节字符中间切割导致 panic 的问题
+  - `truncate_for_log()` 使用 `floor_char_boundary()` 安全截断 UTF-8 字符串
+  - 删除 `stream.rs` 中冗余的 `find_char_boundary()` 函数，直接使用标准库方法
+  - 涉及文件：`src/kiro/provider.rs`, `src/anthropic/stream.rs`
+- 移除历史消息中孤立的 tool_use（无对应 tool_result）
+  - Kiro API 要求 tool_use 必须有配对的 tool_result，否则返回 400 Bad Request
+  - 新增 `remove_orphaned_tool_uses()` 函数清理孤立的 tool_use
+  - 涉及文件：`src/anthropic/converter.rs`
 - 修复 `/cc/v1/messages` 缓冲流 ping 定时器首次立即触发的问题
   - 将 `interval()` 改为 `interval_at(Instant::now() + ping_period, ping_period)`
   - 现在首个 ping 会在 25 秒后触发，与 `/v1/messages` 行为一致

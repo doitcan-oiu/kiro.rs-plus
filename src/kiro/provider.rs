@@ -655,11 +655,13 @@ impl KiroProvider {
     }
 
     /// 截断字符串用于日志输出，避免日志过长
+    /// 使用 floor_char_boundary 安全截断，避免在多字节字符中间截断导致 panic
     fn truncate_for_log(s: &str, max_len: usize) -> String {
         if s.len() <= max_len {
             s.to_string()
         } else {
-            format!("{}...[truncated, total {} bytes]", &s[..max_len], s.len())
+            let end = s.floor_char_boundary(max_len);
+            format!("{}...[truncated, total {} bytes]", &s[..end], s.len())
         }
     }
 }
