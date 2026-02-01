@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Changed
+- 优化 400 Bad Request "输入过长" 错误的日志输出 (`src/kiro/provider.rs`)
+  - 对于 `CONTENT_LENGTH_EXCEEDS_THRESHOLD` / `Input is too long` 错误，不再输出完整请求体（太占空间且无调试价值）
+  - 改为记录 `request_body_bytes`（字节数）和 `estimated_input_tokens`（估算 token 数）
+  - 新增 `estimate_tokens()` 函数：基于 CJK/非 CJK 字符比例估算 token 数量
+    - CJK 字符（中/日/韩）: token 数 = 字符数 / 1.5
+    - 其他字符（英文等）: token 数 = 字符数 / 3.5
+  - 新增 `is_input_too_long()` 和 `is_cjk_char()` 辅助函数
+
 ### Added
 - 新增多维度设备指纹系统 (`src/kiro/fingerprint.rs`)
   - 每个凭据生成独立的确定性指纹，模拟真实 Kiro IDE 客户端

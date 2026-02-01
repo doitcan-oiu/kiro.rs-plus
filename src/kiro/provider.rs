@@ -329,15 +329,29 @@ impl KiroProvider {
 
             // 400 Bad Request
             if status.as_u16() == 400 {
-                // 记录完整的请求信息以便调试（不截断）
-                tracing::error!(
-                    status = %status,
-                    response_body = %body,
-                    request_url = %url,
-                    request_headers = %Self::format_headers_for_log(&headers_for_log),
-                    request_body = %request_body,
-                    "MCP 400 Bad Request - 请求格式错误"
-                );
+                // 输入过长错误：只记录请求体大小，不输出完整内容（太占空间且无调试价值）
+                if Self::is_input_too_long(&body) {
+                    let body_bytes = request_body.len();
+                    let estimated_tokens = Self::estimate_tokens(request_body);
+                    tracing::error!(
+                        status = %status,
+                        response_body = %body,
+                        request_url = %url,
+                        request_body_bytes = body_bytes,
+                        estimated_input_tokens = estimated_tokens,
+                        "MCP 400 Bad Request - 输入上下文过长"
+                    );
+                } else {
+                    // 其他 400 错误：记录完整的请求信息以便调试
+                    tracing::error!(
+                        status = %status,
+                        response_body = %body,
+                        request_url = %url,
+                        request_headers = %Self::format_headers_for_log(&headers_for_log),
+                        request_body = %request_body,
+                        "MCP 400 Bad Request - 请求格式错误"
+                    );
+                }
                 anyhow::bail!("MCP 请求失败: {} {}", status, body);
             }
 
@@ -534,15 +548,29 @@ impl KiroProvider {
 
             // 400 Bad Request - 请求问题，重试/切换凭据无意义
             if status.as_u16() == 400 {
-                // 记录完整的请求信息以便调试（不截断）
-                tracing::error!(
-                    status = %status,
-                    response_body = %body,
-                    request_url = %url,
-                    request_headers = %Self::format_headers_for_log(&headers_for_log),
-                    request_body = %final_body_for_log,
-                    "400 Bad Request - 请求格式错误"
-                );
+                // 输入过长错误：只记录请求体大小，不输出完整内容（太占空间且无调试价值）
+                if Self::is_input_too_long(&body) {
+                    let body_bytes = final_body_for_log.len();
+                    let estimated_tokens = Self::estimate_tokens(&final_body_for_log);
+                    tracing::error!(
+                        status = %status,
+                        response_body = %body,
+                        request_url = %url,
+                        request_body_bytes = body_bytes,
+                        estimated_input_tokens = estimated_tokens,
+                        "400 Bad Request - 输入上下文过长"
+                    );
+                } else {
+                    // 其他 400 错误：记录完整的请求信息以便调试
+                    tracing::error!(
+                        status = %status,
+                        response_body = %body,
+                        request_url = %url,
+                        request_headers = %Self::format_headers_for_log(&headers_for_log),
+                        request_body = %final_body_for_log,
+                        "400 Bad Request - 请求格式错误"
+                    );
+                }
                 anyhow::bail!("{} API 请求失败: {} {}", api_type, status, body);
             }
 
@@ -676,13 +704,13 @@ impl KiroProvider {
             // 解析请求体，移除 profileArn 字段
             let mut request: serde_json::Value = serde_json::from_str(request_body)?;
 
-            if let Some(obj) = request.as_object_mut() {
-                if obj.remove("profileArn").is_some() {
-                    tracing::debug!(
-                        "已移除 profileArn 字段（auth_method={:?}，AWS SSO OIDC 不需要）",
-                        auth_method
-                    );
-                }
+            if let Some(obj) = request.as_object_mut()
+                && obj.remove("profileArn").is_some()
+            {
+                tracing::debug!(
+                    "已移除 profileArn 字段（auth_method={:?}，AWS SSO OIDC 不需要）",
+                    auth_method
+                );
             }
 
             return Ok(serde_json::to_string(&request)?);
@@ -777,6 +805,54 @@ impl KiroProvider {
     fn is_invalid_bearer_token(body: &str) -> bool {
         let lower = body.to_ascii_lowercase();
         lower.contains("bearer token") && lower.contains("invalid")
+    }
+
+    /// 检测是否为「输入过长」类错误
+    ///
+    /// 典型返回：
+    /// `{"message":"Input is too long.","reason":"CONTENT_LENGTH_EXCEEDS_THRESHOLD"}`
+    fn is_input_too_long(body: &str) -> bool {
+        body.contains("CONTENT_LENGTH_EXCEEDS_THRESHOLD") || body.contains("Input is too long")
+    }
+
+    /// 估算文本的 token 数量
+    ///
+    /// 基于字符类型的估算公式：
+    /// - CJK 字符（中/日/韩）: token 数 = 字符数 / 1.5
+    /// - 其他字符（英文等）: token 数 = 字符数 / 3.5
+    fn estimate_tokens(text: &str) -> usize {
+        let mut cjk_count = 0usize;
+        let mut other_count = 0usize;
+
+        for c in text.chars() {
+            if Self::is_cjk_char(c) {
+                cjk_count += 1;
+            } else {
+                other_count += 1;
+            }
+        }
+
+        let cjk_tokens = cjk_count as f64 / 1.5;
+        let other_tokens = other_count as f64 / 3.5;
+        (cjk_tokens + other_tokens + 0.5) as usize
+    }
+
+    /// 判断是否为 CJK（中日韩）字符
+    #[inline]
+    fn is_cjk_char(c: char) -> bool {
+        matches!(c,
+            '\u{4E00}'..='\u{9FFF}'   |  // CJK 统一汉字
+            '\u{3400}'..='\u{4DBF}'   |  // CJK 扩展 A
+            '\u{20000}'..='\u{2A6DF}' |  // CJK 扩展 B
+            '\u{2A700}'..='\u{2B73F}' |  // CJK 扩展 C
+            '\u{2B740}'..='\u{2B81F}' |  // CJK 扩展 D
+            '\u{F900}'..='\u{FAFF}'   |  // CJK 兼容汉字
+            '\u{2F800}'..='\u{2FA1F}' |  // CJK 兼容扩展
+            '\u{3000}'..='\u{303F}'   |  // CJK 标点符号
+            '\u{3040}'..='\u{309F}'   |  // 平假名
+            '\u{30A0}'..='\u{30FF}'   |  // 片假名
+            '\u{AC00}'..='\u{D7AF}'      // 韩文音节
+        )
     }
 
     /// 格式化 HeaderMap 为可读字符串（用于日志输出）
