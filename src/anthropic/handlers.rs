@@ -184,7 +184,7 @@ pub async fn post_messages(
     };
 
     #[cfg(feature = "sensitive-logs")]
-    tracing::debug!("Kiro request body: {}", truncate_middle(&request_body, 500));
+    tracing::debug!("Kiro request body: {}", truncate_middle(&request_body, 1200));
     #[cfg(not(feature = "sensitive-logs"))]
     tracing::debug!(
         kiro_request_body_bytes = request_body.len(),
@@ -673,7 +673,7 @@ pub async fn post_messages_cc(
     };
 
     #[cfg(feature = "sensitive-logs")]
-    tracing::debug!("Kiro request body: {}", truncate_middle(&request_body, 500));
+    tracing::debug!("Kiro request body: {}", truncate_middle(&request_body, 1200));
     #[cfg(not(feature = "sensitive-logs"))]
     tracing::debug!(
         kiro_request_body_bytes = request_body.len(),

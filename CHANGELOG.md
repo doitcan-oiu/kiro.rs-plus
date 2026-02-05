@@ -4,7 +4,7 @@
 
 ### Changed
 - 优化 debug 日志中请求体的输出长度 (`src/anthropic/handlers.rs`)
-  - 新增 `truncate_middle()` 函数：截断字符串中间部分，保留头尾各 500 字符
+  - 新增 `truncate_middle()` 函数：截断字符串中间部分，保留头尾各 1200 字符
   - 正确处理 UTF-8 多字节字符边界，不会截断中文
   - 仅在启用 `sensitive-logs` feature 时生效，减少日志噪音
 
