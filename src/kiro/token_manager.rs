@@ -613,6 +613,33 @@ pub struct MultiTokenManager {
     background_refresher: Option<Arc<BackgroundRefresher>>,
 }
 
+/// 凭据可用性诊断：被禁用的凭据
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct DisabledCredentialDiag {
+    id: u64,
+    disable_reason: Option<DisableReason>,
+    failure_count: u32,
+    priority: u32,
+}
+
+/// 凭据可用性诊断：处于冷却的凭据
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct CooldownCredentialDiag {
+    id: u64,
+    reason: CooldownReason,
+    remaining_ms: u64,
+}
+
+/// 凭据可用性诊断：被速率限制挡住的凭据
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+struct RateLimitedCredentialDiag {
+    id: u64,
+    wait_ms: u64,
+}
+
 /// 每个凭据最大 API 调用失败次数
 const MAX_FAILURES_PER_CREDENTIAL: u32 = 2;
 
@@ -784,6 +811,110 @@ impl MultiTokenManager {
         self.entries.lock().iter().filter(|e| !e.disabled).count()
     }
 
+    /// 输出一份“为什么当前没有可用凭据”的诊断信息（用于排障）
+    ///
+    /// 注意：该方法只在 DEBUG 日志级别开启时执行，避免给正常路径引入额外开销。
+    fn debug_log_availability_diagnostics(
+        &self,
+        event: &'static str,
+        tried_ids: &[u64],
+        min_wait: Option<std::time::Duration>,
+        min_wait_detail: Option<(u64, &'static str, std::time::Duration)>,
+    ) {
+        if !tracing::enabled!(tracing::Level::DEBUG) {
+            return;
+        }
+
+        // 先快照 entries，避免在持有 entries 锁时再去访问 rate_limiter/cooldown_manager。
+        let (total, mut enabled_ids, mut disabled) =
+            {
+                let entries = self.entries.lock();
+                let mut enabled_ids: Vec<u64> = Vec::with_capacity(entries.len());
+                let mut disabled: Vec<DisabledCredentialDiag> = Vec::new();
+
+                for e in entries.iter() {
+                    if e.disabled {
+                        disabled.push(DisabledCredentialDiag {
+                            id: e.id,
+                            disable_reason: e.disable_reason,
+                            failure_count: e.failure_count,
+                            priority: e.credentials.priority,
+                        });
+                    } else {
+                        enabled_ids.push(e.id);
+                    }
+                }
+
+                (entries.len(), enabled_ids, disabled)
+            };
+
+        enabled_ids.sort_unstable();
+        disabled.sort_by_key(|d| d.id);
+
+        let enabled_total = enabled_ids.len();
+        let disabled_total = disabled.len();
+
+        let mut cooldowns: Vec<CooldownCredentialDiag> = Vec::new();
+        let mut rate_limited: Vec<RateLimitedCredentialDiag> = Vec::new();
+        let mut ready: Vec<u64> = Vec::new();
+
+        for id in &enabled_ids {
+            if let Some((reason, remaining)) = self.cooldown_manager.check_cooldown(*id) {
+                cooldowns.push(CooldownCredentialDiag {
+                    id: *id,
+                    reason,
+                    remaining_ms: remaining.as_millis() as u64,
+                });
+                continue;
+            }
+
+            match self.rate_limiter.check_rate_limit(*id) {
+                Ok(()) => ready.push(*id),
+                Err(wait) => rate_limited.push(RateLimitedCredentialDiag {
+                    id: *id,
+                    wait_ms: wait.as_millis() as u64,
+                }),
+            }
+        }
+
+        cooldowns.sort_by_key(|c| (c.remaining_ms, c.id));
+        rate_limited.sort_by_key(|r| (r.wait_ms, r.id));
+        ready.sort_unstable();
+
+        // 基于诊断时刻的 check_rate_limit/check_cooldown 计算“下一次可能可用”的最短等待
+        let computed_min_wait_ms = cooldowns
+            .iter()
+            .map(|c| c.remaining_ms)
+            .chain(rate_limited.iter().map(|r| r.wait_ms))
+            .min();
+
+        let min_wait_ms = min_wait.map(|d| d.as_millis() as u64);
+        let (min_wait_from_id, min_wait_source, min_wait_source_ms) = match min_wait_detail {
+            Some((id, source, d)) => (Some(id), Some(source), Some(d.as_millis() as u64)),
+            None => (None, None, None),
+        };
+
+        tracing::debug!(
+            event = event,
+            total = total,
+            enabled_total = enabled_total,
+            disabled_total = disabled_total,
+            tried = tried_ids.len(),
+            tried_ids = ?tried_ids,
+            config_credential_rpm = ?self.config.credential_rpm,
+            min_wait_ms = ?min_wait_ms,
+            min_wait_from_id = ?min_wait_from_id,
+            min_wait_source = ?min_wait_source,
+            min_wait_source_ms = ?min_wait_source_ms,
+            computed_min_wait_ms = ?computed_min_wait_ms,
+            disabled = ?disabled,
+            cooldowns = ?cooldowns,
+            rate_limited = ?rate_limited,
+            ready = ?ready,
+            "凭据可用性诊断"
+        );
+    }
+
     /// 选择最佳凭据（两级排序：使用次数最少 + 余额最多；完全相同则轮询）
     fn select_best_candidate_id(&self, candidate_ids: &[u64]) -> Option<u64> {
         if candidate_ids.is_empty() {
@@ -844,15 +975,64 @@ impl MultiTokenManager {
         let mut tried_ids: Vec<u64> = Vec::new();
         // 当所有凭据都因“临时不可用”（冷却/速率限制）被跳过时，等待最短可用时间再重试。
         let mut min_wait: Option<std::time::Duration> = None;
+        // 记录最短等待时间来自哪个凭据/原因，便于排障定位（冷却 vs 速率限制）。
+        let mut min_wait_detail: Option<(u64, &'static str, std::time::Duration)> = None;
 
         loop {
-            if tried_ids.len() >= total {
+            // tried_ids 只会记录“本轮已经尝试过的可用凭据”（disabled 的不会被选中）。
+            // 因此当存在部分 disabled 凭据时，tried_ids.len() 可能永远达不到 total，
+            // 但已用尽所有可用凭据（常见于：全部被速率限制/冷却短暂挡住）。
+            //
+            // 这里用 available_count() 判断“可用集合是否已被尝试完”，避免误报
+            // "所有凭据均已禁用（x/y）" 这类与事实不符的错误。
+            let enabled_total = self.available_count();
+            if enabled_total > 0 && tried_ids.len() >= enabled_total {
                 if let Some(wait) = min_wait {
+                    self.debug_log_availability_diagnostics(
+                        "enabled_exhausted_sleep",
+                        &tried_ids,
+                        min_wait,
+                        min_wait_detail,
+                    );
                     tokio::time::sleep(wait).await;
                     tried_ids.clear();
                     min_wait = None;
+                    min_wait_detail = None;
                     continue;
                 }
+                self.debug_log_availability_diagnostics(
+                    "enabled_exhausted_bail",
+                    &tried_ids,
+                    min_wait,
+                    min_wait_detail,
+                );
+                anyhow::bail!(
+                    "所有可用凭据均无法获取有效 Token（可用: {}/{}）",
+                    enabled_total,
+                    total
+                );
+            }
+
+            if tried_ids.len() >= total {
+                if let Some(wait) = min_wait {
+                    self.debug_log_availability_diagnostics(
+                        "total_exhausted_sleep",
+                        &tried_ids,
+                        min_wait,
+                        min_wait_detail,
+                    );
+                    tokio::time::sleep(wait).await;
+                    tried_ids.clear();
+                    min_wait = None;
+                    min_wait_detail = None;
+                    continue;
+                }
+                self.debug_log_availability_diagnostics(
+                    "total_exhausted_bail",
+                    &tried_ids,
+                    min_wait,
+                    min_wait_detail,
+                );
                 anyhow::bail!(
                     "所有凭据均无法获取有效 Token（可用: {}/{}）",
                     self.available_count(),
@@ -896,7 +1076,16 @@ impl MultiTokenManager {
 
                 if candidates.is_empty() {
                     let available = entries.iter().filter(|e| !e.disabled).count();
-                    anyhow::bail!("所有凭据均已禁用（{}/{}）", available, total);
+                    if available == 0 {
+                        anyhow::bail!("所有凭据均已禁用（{}/{}）", available, total);
+                    }
+                    anyhow::bail!(
+                        "所有可用凭据均已尝试（可用: {}/{}，已尝试: {}/{}）",
+                        available,
+                        total,
+                        tried_ids.len(),
+                        available
+                    );
                 }
 
                 candidates
@@ -914,12 +1103,29 @@ impl MultiTokenManager {
                 .ok_or_else(|| anyhow::anyhow!("没有可用凭据"))?;
 
             // 冷却/速率限制：把“临时不可用”的凭据视为本轮不可选，从而自然分流到其他凭据。
-            if let Some((_, remaining)) = self.cooldown_manager.check_cooldown(id) {
+            if let Some((reason, remaining)) = self.cooldown_manager.check_cooldown(id) {
+                tracing::trace!(
+                    credential_id = %id,
+                    reason = ?reason,
+                    remaining_ms = %remaining.as_millis(),
+                    "凭据处于冷却，跳过"
+                );
+                if min_wait.map(|w| remaining < w).unwrap_or(true) {
+                    min_wait_detail = Some((id, "cooldown", remaining));
+                }
                 min_wait = Some(min_wait.map(|w| w.min(remaining)).unwrap_or(remaining));
                 tried_ids.push(id);
                 continue;
             }
             if let Err(wait) = self.rate_limiter.try_acquire(id) {
+                tracing::trace!(
+                    credential_id = %id,
+                    wait_ms = %wait.as_millis(),
+                    "凭据触发速率限制，跳过"
+                );
+                if min_wait.map(|w| wait < w).unwrap_or(true) {
+                    min_wait_detail = Some((id, "rate_limit", wait));
+                }
                 min_wait = Some(min_wait.map(|w| w.min(wait)).unwrap_or(wait));
                 tried_ids.push(id);
                 continue;
@@ -972,7 +1178,8 @@ impl MultiTokenManager {
             };
 
             if is_enabled {
-                if let Some((reason, _)) = self.cooldown_manager.check_cooldown(bound_id) {
+                if let Some((reason, remaining)) = self.cooldown_manager.check_cooldown(bound_id)
+                {
                     // 对“长冷却”原因不保留绑定，避免长期命中后每次都先失败再回退。
                     keep_affinity_binding = matches!(
                         reason,
@@ -981,7 +1188,25 @@ impl MultiTokenManager {
                             | CooldownReason::ServerError
                             | CooldownReason::ModelUnavailable
                     );
-                } else if let Ok(()) = self.rate_limiter.try_acquire(bound_id) {
+                    tracing::debug!(
+                        user_id = %user_id,
+                        credential_id = %bound_id,
+                        reason = ?reason,
+                        remaining_ms = %remaining.as_millis(),
+                        keep_affinity_binding = %keep_affinity_binding,
+                        "亲和性绑定凭据处于冷却，本次将分流"
+                    );
+                } else if let Err(wait) = self.rate_limiter.try_acquire(bound_id) {
+                    // 速率限制是短期现象，保留绑定但允许本次分流
+                    keep_affinity_binding = true;
+                    tracing::debug!(
+                        user_id = %user_id,
+                        credential_id = %bound_id,
+                        wait_ms = %wait.as_millis(),
+                        keep_affinity_binding = %keep_affinity_binding,
+                        "亲和性绑定凭据触发速率限制，本次将分流"
+                    );
+                } else {
                     let credentials = {
                         let entries = self.entries.lock();
                         entries
@@ -990,15 +1215,29 @@ impl MultiTokenManager {
                             .map(|e| e.credentials.clone())
                     };
 
-                    if let Some(creds) = credentials
-                        && let Ok(ctx) = self.try_ensure_token(bound_id, &creds).await
-                    {
-                        self.affinity.touch(user_id);
-                        return Ok(ctx);
+                    match credentials {
+                        Some(creds) => match self.try_ensure_token(bound_id, &creds).await {
+                            Ok(ctx) => {
+                                self.affinity.touch(user_id);
+                                return Ok(ctx);
+                            }
+                            Err(e) => {
+                                tracing::debug!(
+                                    user_id = %user_id,
+                                    credential_id = %bound_id,
+                                    error = %e,
+                                    "亲和性绑定凭据 token 获取/刷新失败，本次将分流"
+                                );
+                            }
+                        },
+                        None => {
+                            tracing::warn!(
+                                user_id = %user_id,
+                                credential_id = %bound_id,
+                                "亲和性命中但凭据不存在，本次将分流"
+                            );
+                        }
                     }
-                } else {
-                    // 速率限制是短期现象，保留绑定但允许本次分流
-                    keep_affinity_binding = true;
                 }
             }
         }
@@ -2357,6 +2596,43 @@ mod tests {
             err
         );
         assert_eq!(manager.available_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_multi_token_manager_rate_limited_with_some_disabled_does_not_report_all_disabled() {
+        // 复现线上日志：
+        // - total > available（部分凭据被禁用）
+        // - 所有可用凭据都被速率限制/冷却暂时挡住
+        // 期望：等待最短可用时间后继续尝试，而不是误报“所有凭据均已禁用（x/y）”。
+
+        let mut config = Config::default();
+        // 固定间隔 10ms，避免测试过慢且消除抖动带来的不确定性
+        config.credential_rpm = Some(6000);
+
+        let cred1 = KiroCredentials {
+            access_token: Some("token-1".to_string()),
+            expires_at: Some("2999-01-01T00:00:00Z".to_string()),
+            ..Default::default()
+        };
+        let cred2 = KiroCredentials {
+            access_token: Some("token-2".to_string()),
+            expires_at: Some("2999-01-01T00:00:00Z".to_string()),
+            ..Default::default()
+        };
+
+        let manager =
+            MultiTokenManager::new(config, vec![cred1, cred2], None, None, false).unwrap();
+
+        // 禁用 #2，仅保留一个可用凭据
+        assert!(manager.report_quota_exhausted(2));
+        assert_eq!(manager.available_count(), 1);
+
+        // 预先占位：让 #1 在下一次 acquire_context() 时必然触发速率限制
+        assert!(manager.rate_limiter().try_acquire(1).is_ok());
+
+        // 关键断言：不会抛出“所有凭据均已禁用（1/2）”，而是等待后成功返回。
+        let ctx = manager.acquire_context().await.unwrap();
+        assert_eq!(ctx.id, 1);
     }
 
     // ============ 凭据级 Region 优先级测试 ============
