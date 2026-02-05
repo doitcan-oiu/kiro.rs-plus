@@ -554,7 +554,7 @@ impl StreamContext {
                     / 100.0) as i32;
                 self.context_input_tokens = Some(actual_input_tokens);
                 tracing::debug!(
-                    "收到 contextUsageEvent: {}%, 计算 input_tokens: {}",
+                    "收到 contextUsageEvent: {:.4}%, 计算 input_tokens: {}",
                     context_usage.context_usage_percentage,
                     actual_input_tokens
                 );
