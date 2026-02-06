@@ -3,6 +3,13 @@
 ## [Unreleased]
 
 ### Changed
+- 重构 README.md 配置文档，提升新用户上手体验
+  - 明确配置文件默认路径：当前工作目录（或通过 `-c`/`--config` 和 `--credentials` 参数指定）
+  - 添加 JSON 注释警告：移除所有带 `//` 注释的示例，提供可直接复制的配置
+  - 修正字段必填性：仅 `apiKey` 为必填，其他字段均有默认值
+  - 新增命令行参数说明表格（`-c`, `--credentials`, `-h`, `-V`）
+  - 补充遗漏的 `credentialRpm` 字段说明（凭据级 RPM 限流）
+  - 使用表格形式展示配置字段，标注必填/可选和默认值
 - 优化 debug 日志中请求体的输出长度 (`src/anthropic/handlers.rs`)
   - 新增 `truncate_middle()` 函数：截断字符串中间部分，保留头尾各 1200 字符
   - 正确处理 UTF-8 多字节字符边界，不会截断中文

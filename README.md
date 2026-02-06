@@ -61,75 +61,123 @@ cargo build --release
 
 ### 2. 配置文件
 
-创建 `config.json` 配置文件：
+在**当前工作目录**创建 `config.json` 配置文件（或通过 `-c` 参数指定路径）：
+
+> ⚠️ **注意**：JSON 不支持注释，请勿复制带 `//` 注释的示例。下方提供可直接复制的配置。
+
+**最小启动配置**（可直接复制使用）：
 
 ```json
 {
-   "host": "127.0.0.1",   // 必配, 监听地址
-   "port": 8990,  // 必配, 监听端口
-   "apiKey": "sk-kiro-rs-qazWSXedcRFV123456",  // 必配, 请求的鉴权 token
-   "region": "us-east-1",  // 必配, 区域, 一般保持默认即可
-   "tlsBackend": "rustls", // 可选, TLS 后端: rustls / native-tls
-   "kiroVersion": "0.8.0",  // 可选, 用于自定义请求特征, 不需要请删除: kiro ide 版本
-   "machineId": "如果你需要自定义机器码请将64位机器码填到这里", // 可选, 用于自定义请求特征, 不需要请删除: 机器码
-   "systemVersion": "darwin#24.6.0",  // 可选, 用于自定义请求特征, 不需要请删除: 系统版本
-   "nodeVersion": "22.21.1",  // 可选, 用于自定义请求特征, 不需要请删除: node 版本
-   "countTokensApiUrl": "https://api.example.com/v1/messages/count_tokens", // 可选, 用于自定义token统计API, 不需要请删除
-   "countTokensApiKey": "sk-your-count-tokens-api-key",  // 可选, 用于自定义token统计API, 不需要请删除
-   "countTokensAuthType": "x-api-key",  // 可选, 用于自定义token统计API, 不需要请删除
-   "proxyUrl": "http://127.0.0.1:7890", // 可选, HTTP/SOCK5代理, 不需要请删除
-   "proxyUsername": "user",  // 可选, HTTP/SOCK5代理用户名, 不需要请删除
-   "proxyPassword": "pass",  // 可选, HTTP/SOCK5代理密码, 不需要请删除
-   "adminApiKey": "sk-admin-your-secret-key"  // 可选, Admin API 密钥, 用于启用凭据管理 API, 填写后才会启用web管理， 不需要请删除
+  "apiKey": "sk-your-api-key"
 }
 ```
-最小启动配置为: 
+
+> 其他字段均有默认值：`host` 默认 `127.0.0.1`，`port` 默认 `8080`，`region` 默认 `us-east-1`，`tlsBackend` 默认 `rustls`
+
+**启用 Admin UI**（添加 `adminApiKey` 后可访问 `/admin` 管理界面）：
+
 ```json
 {
-   "host": "127.0.0.1",
-   "port": 8990,
-   "apiKey": "sk-kiro-rs-qazWSXedcRFV123456",
-   "region": "us-east-1",
-   "tlsBackend": "rustls"
+  "apiKey": "sk-your-api-key",
+  "adminApiKey": "sk-admin-your-key"
 }
 ```
+
+**推荐配置**（显式指定常用字段）：
+
+```json
+{
+  "host": "127.0.0.1",
+  "port": 8990,
+  "apiKey": "sk-your-api-key",
+  "region": "us-east-1"
+}
+```
+
+**完整配置字段说明**：
+
+| 字段 | 必填 | 默认值 | 说明 |
+|------|------|--------|------|
+| `apiKey` | ✅ | - | 请求鉴权 Token |
+| `host` | ❌ | `127.0.0.1` | 监听地址 |
+| `port` | ❌ | `8080` | 监听端口 |
+| `region` | ❌ | `us-east-1` | AWS 区域 |
+| `tlsBackend` | ❌ | `rustls` | TLS 后端：`"rustls"` 或 `"native-tls"` |
+| `kiroVersion` | ❌ | `0.8.0` | Kiro IDE 版本，用于自定义请求特征 |
+| `machineId` | ❌ | 自动生成 | 64 位机器码，用于自定义请求特征 |
+| `systemVersion` | ❌ | 随机 | 系统版本标识，如 `"darwin#24.6.0"` |
+| `nodeVersion` | ❌ | `22.21.1` | Node.js 版本标识 |
+| `countTokensApiUrl` | ❌ | - | 外部 Token 统计 API 地址 |
+| `countTokensApiKey` | ❌ | - | 外部 Token 统计 API 密钥 |
+| `countTokensAuthType` | ❌ | `x-api-key` | 外部 API 认证类型：`"x-api-key"` 或 `"bearer"` |
+| `proxyUrl` | ❌ | - | HTTP/SOCKS5 代理地址 |
+| `proxyUsername` | ❌ | - | 代理用户名 |
+| `proxyPassword` | ❌ | - | 代理密码 |
+| `adminApiKey` | ❌ | - | Admin API 密钥，配置后启用 Web 管理界面 |
+| `credentialRpm` | ❌ | - | 单凭据目标 RPM（每分钟请求数），用于凭据级节流分流 |
+
 ### 3. 凭证文件
 
-创建 `credentials.json` 凭证文件（从 Kiro IDE 获取）。支持两种格式：
+在**当前工作目录**创建 `credentials.json` 凭证文件（或通过 `--credentials` 参数指定路径）。
+
+凭证信息从 Kiro IDE 获取，支持两种格式：
 
 #### 单凭据格式（旧格式，向后兼容）
 
+**最小配置 - Social 登录**（可直接复制）：
+
 ```json
 {
-   "accessToken": "这里是请求token 一般有效期一小时",  // 可选, 不需要请删除, 可以自动刷新
-   "refreshToken": "这里是刷新token 一般有效期7-30天不等",  // 必配, 根据实际填写
-   "profileArn": "这是profileArn, 如果没有请你删除该字段， 配置应该像这个 arn:aws:codewhisperer:us-east-1:111112222233:profile/QWER1QAZSDFGH",  // 可选, 不需要请删除
-   "expiresAt": "这里是请求token过期时间, 一般格式是这样2025-12-31T02:32:45.144Z, 在过期前 kirors 不会请求刷新请求token",  // 必配, 不确定你需要写一个已经过期的UTC时间
-   "authMethod": "这里是认证方式 social / idc",  // 必配, IdC/Builder-ID/IAM 三类用户统一填写 idc
-   "clientId": "如果你是 IdC 登录 需要配置这个",  // 可选, 不需要请删除
-   "clientSecret": "如果你是 IdC 登录 需要配置这个"  // 可选, 不需要请删除
+  "refreshToken": "你的刷新Token",
+  "expiresAt": "2025-01-01T00:00:00.000Z",
+  "authMethod": "social"
 }
 ```
+
+**最小配置 - IdC/Builder-ID/IAM 登录**（可直接复制）：
+
+```json
+{
+  "refreshToken": "你的刷新Token",
+  "expiresAt": "2025-01-01T00:00:00.000Z",
+  "authMethod": "idc",
+  "clientId": "你的clientId",
+  "clientSecret": "你的clientSecret"
+}
+```
+
+**单凭据字段说明**：
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `refreshToken` | ✅ | 刷新 Token，有效期 7-30 天不等 |
+| `expiresAt` | ✅ | Token 过期时间（RFC3339 格式），不确定可填已过期时间 |
+| `authMethod` | ✅ | 认证方式：`"social"` 或 `"idc"`（IdC/Builder-ID/IAM 统一填 `"idc"`） |
+| `accessToken` | ❌ | 访问 Token，可自动刷新 |
+| `profileArn` | ❌ | AWS Profile ARN |
+| `clientId` | ❌ | IdC 登录必填 |
+| `clientSecret` | ❌ | IdC 登录必填 |
 
 #### 多凭据格式（新格式，支持故障转移和自动回写）
 
 ```json
 [
-   {
-      "refreshToken": "第一个凭据的刷新token",
-      "expiresAt": "2025-12-31T02:32:45.144Z",
-      "authMethod": "social",
-      "priority": 0
-   },
-   {
-      "refreshToken": "第二个凭据的刷新token",
-      "expiresAt": "2025-12-31T02:32:45.144Z",
-      "authMethod": "idc",
-      "clientId": "xxxxxxxxx",
-      "clientSecret": "xxxxxxxxx",
-      "region": "us-east-2",
-      "priority": 1
-   }
+  {
+    "refreshToken": "第一个凭据的刷新Token",
+    "expiresAt": "2025-12-31T02:32:45.144Z",
+    "authMethod": "social",
+    "priority": 0
+  },
+  {
+    "refreshToken": "第二个凭据的刷新Token",
+    "expiresAt": "2025-12-31T02:32:45.144Z",
+    "authMethod": "idc",
+    "clientId": "xxxxxxxxx",
+    "clientSecret": "xxxxxxxxx",
+    "region": "us-east-2",
+    "priority": 1
+  }
 ]
 ```
 
@@ -141,36 +189,31 @@ cargo build --release
 > - 可选的 `region` 字段：用于 OIDC token 刷新时指定 endpoint 区域，未配置时回退到 config.json 的 region
 > - 可选的 `machineId` 字段：凭据级机器码；未配置时回退到 config.json 的 machineId；都未配置时由 refreshToken 派生
 
-最小启动配置(social):
-```json
-{
-   "refreshToken": "XXXXXXXXXXXXXXXX",
-   "expiresAt": "2025-12-31T02:32:45.144Z",
-   "authMethod": "social"
-}
-```
-
-最小启动配置(idc):
-```json
-{
-   "refreshToken": "XXXXXXXXXXXXXXXX",
-   "expiresAt": "2025-12-31T02:32:45.144Z",
-   "authMethod": "idc",
-   "clientId": "xxxxxxxxx",
-   "clientSecret": "xxxxxxxxx"
-}
-```
 ### 4. 启动服务
+
+**方式一：默认路径启动**
+
+将 `config.json` 和 `credentials.json` 放在当前工作目录下，直接运行：
 
 ```bash
 ./target/release/kiro-rs
+# Windows: target\release\kiro-rs.exe
 ```
 
-或指定配置文件路径：
+**方式二：指定配置文件路径**
 
 ```bash
-./target/release/kiro-rs -c /path/to/config.json --credentials /path/to/credentials.json
+./kiro-rs -c /path/to/config.json --credentials /path/to/credentials.json
 ```
+
+**命令行参数**：
+
+| 参数 | 说明 |
+|------|------|
+| `-c, --config` | 配置文件路径，默认为当前工作目录的 `config.json` |
+| `--credentials` | 凭证文件路径，默认为当前工作目录的 `credentials.json` |
+| `-h, --help` | 显示帮助信息 |
+| `-V, --version` | 显示版本号 |
 
 ### 5. 使用 API
 
@@ -187,50 +230,49 @@ curl http://127.0.0.1:8990/v1/messages \
   }'
 ```
 
-## 配置说明
+## 配置参考
+
+> 详细字段说明见上方"快速开始"章节，此处仅列出类型和默认值。
 
 ### config.json
 
-| 字段 | 类型 | 默认值 | 描述                      |
-|------|------|--------|-------------------------|
-| `host` | string | `127.0.0.1` | 服务监听地址                  |
-| `port` | number | `8080` | 服务监听端口                  |
-| `apiKey` | string | - | 自定义 API Key（用于客户端认证，必配） |
-| `region` | string | `us-east-1` | AWS 区域                  |
-| `kiroVersion` | string | `0.8.0` | Kiro 版本号                |
-| `machineId` | string | - | 自定义机器码（64位十六进制）不定义则自动生成 |
-| `systemVersion` | string | 随机 | 系统版本标识                  |
-| `nodeVersion` | string | `22.21.1` | Node.js 版本标识            |
-| `tlsBackend` | string | `rustls` | TLS 后端：`rustls` 或 `native-tls` |
-| `countTokensApiUrl` | string | - | 外部 count_tokens API 地址（可选） |
-| `countTokensApiKey` | string | - | 外部 count_tokens API 密钥（可选） |
-| `countTokensAuthType` | string | `x-api-key` | 外部 API 认证类型：`x-api-key` 或 `bearer` |
-| `proxyUrl` | string | - | HTTP/SOCKS5 代理地址（可选） |
-| `proxyUsername` | string | - | 代理用户名（可选） |
-| `proxyPassword` | string | - | 代理密码（可选） |
-| `adminApiKey` | string | - | Admin API 密钥，配置后启用凭据管理 API, 填写后才会启用web管理（可选） |
+| 字段 | 类型 | 默认值 |
+|------|------|--------|
+| `apiKey` | string | - |
+| `host` | string | `127.0.0.1` |
+| `port` | number | `8080` |
+| `region` | string | `us-east-1` |
+| `tlsBackend` | string | `rustls` |
+| `kiroVersion` | string | `0.8.0` |
+| `machineId` | string | 自动生成 |
+| `systemVersion` | string | 随机 |
+| `nodeVersion` | string | `22.21.1` |
+| `countTokensApiUrl` | string | - |
+| `countTokensApiKey` | string | - |
+| `countTokensAuthType` | string | `x-api-key` |
+| `proxyUrl` | string | - |
+| `proxyUsername` | string | - |
+| `proxyPassword` | string | - |
+| `adminApiKey` | string | - |
+| `credentialRpm` | number | - |
 
 ### credentials.json
 
-支持单对象格式（向后兼容）或数组格式（多凭据）。
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | number | 凭据 ID（Admin API 用，手写可不填） |
+| `accessToken` | string | 访问令牌（可自动刷新） |
+| `refreshToken` | string | 刷新令牌 |
+| `profileArn` | string | AWS Profile ARN |
+| `expiresAt` | string | 过期时间（RFC3339） |
+| `authMethod` | string | `social` 或 `idc` |
+| `clientId` | string | IdC 登录必填 |
+| `clientSecret` | string | IdC 登录必填 |
+| `priority` | number | 优先级（多凭据时有效） |
+| `region` | string | 凭据级 region |
+| `machineId` | string | 凭据级机器码 |
 
-| 字段 | 类型 | 描述                      |
-|------|------|-------------------------|
-| `id` | number | 凭据唯一 ID（可选，仅用于 Admin API 管理；手写文件可不填） |
-| `accessToken` | string | OAuth 访问令牌（可选，可自动刷新）    |
-| `refreshToken` | string | OAuth 刷新令牌              |
-| `profileArn` | string | AWS Profile ARN（可选，登录时返回） |
-| `expiresAt` | string | Token 过期时间 (RFC3339)    |
-| `authMethod` | string | 认证方式（`social` / `idc`） |
-| `clientId` | string | IdC 登录的客户端 ID（可选）      |
-| `clientSecret` | string | IdC 登录的客户端密钥（可选）      |
-| `priority` | number | 凭据优先级，数字越小越优先，默认为 0（多凭据格式时有效）|
-| `region` | string | 凭据级 region（可选），用于 OIDC token 刷新时指定 endpoint 的区域。未配置时回退到 config.json 的 region。注意：API 调用始终使用 config.json 的 region |
-| `machineId` | string | 凭据级机器码（可选，64位十六进制）。未配置时回退到 config.json 的 machineId；都未配置时由 refreshToken 派生 |
-
-说明：
-- IdC / Builder-ID / IAM 在本项目里属于同一种登录方式，配置时统一使用 `authMethod: "idc"`
-- 为兼容旧配置，`builder-id` / `iam` 仍可被识别，但会按 `idc` 处理
+> **说明**：IdC / Builder-ID / IAM 统一使用 `authMethod: "idc"`
 
 ## 模型映射
 
