@@ -662,6 +662,33 @@ pub struct CallContext {
     pub token: String,
 }
 
+/// 解析 symlink 目标路径
+///
+/// 优先使用 `canonicalize`（解析所有 symlink 并返回绝对路径）。
+/// 如果失败（例如目标文件不存在），则尝试用 `read_link` 解析一层 symlink。
+/// 如果都失败，返回原路径。
+fn resolve_symlink_target(path: &PathBuf) -> PathBuf {
+    // 优先尝试 canonicalize（目标文件存在时最可靠）
+    if let Ok(real) = std::fs::canonicalize(path) {
+        return real;
+    }
+
+    // canonicalize 失败（目标可能不存在），尝试 read_link 解析 symlink
+    if let Ok(target) = std::fs::read_link(path) {
+        // read_link 返回的可能是相对路径，需要相对于 symlink 所在目录解析
+        if target.is_absolute() {
+            return target;
+        }
+        if let Some(parent) = path.parent() {
+            return parent.join(target);
+        }
+        return target;
+    }
+
+    // 都失败，返回原路径
+    path.clone()
+}
+
 impl MultiTokenManager {
     /// 创建多凭据 Token 管理器
     ///
@@ -826,27 +853,26 @@ impl MultiTokenManager {
         }
 
         // 先快照 entries，避免在持有 entries 锁时再去访问 rate_limiter/cooldown_manager。
-        let (total, mut enabled_ids, mut disabled) =
-            {
-                let entries = self.entries.lock();
-                let mut enabled_ids: Vec<u64> = Vec::with_capacity(entries.len());
-                let mut disabled: Vec<DisabledCredentialDiag> = Vec::new();
+        let (total, mut enabled_ids, mut disabled) = {
+            let entries = self.entries.lock();
+            let mut enabled_ids: Vec<u64> = Vec::with_capacity(entries.len());
+            let mut disabled: Vec<DisabledCredentialDiag> = Vec::new();
 
-                for e in entries.iter() {
-                    if e.disabled {
-                        disabled.push(DisabledCredentialDiag {
-                            id: e.id,
-                            disable_reason: e.disable_reason,
-                            failure_count: e.failure_count,
-                            priority: e.credentials.priority,
-                        });
-                    } else {
-                        enabled_ids.push(e.id);
-                    }
+            for e in entries.iter() {
+                if e.disabled {
+                    disabled.push(DisabledCredentialDiag {
+                        id: e.id,
+                        disable_reason: e.disable_reason,
+                        failure_count: e.failure_count,
+                        priority: e.credentials.priority,
+                    });
+                } else {
+                    enabled_ids.push(e.id);
                 }
+            }
 
-                (entries.len(), enabled_ids, disabled)
-            };
+            (entries.len(), enabled_ids, disabled)
+        };
 
         enabled_ids.sort_unstable();
         disabled.sort_by_key(|d| d.id);
@@ -1178,8 +1204,7 @@ impl MultiTokenManager {
             };
 
             if is_enabled {
-                if let Some((reason, remaining)) = self.cooldown_manager.check_cooldown(bound_id)
-                {
+                if let Some((reason, remaining)) = self.cooldown_manager.check_cooldown(bound_id) {
                     // 对“长冷却”原因不保留绑定，避免长期命中后每次都先失败再回退。
                     keep_affinity_binding = matches!(
                         reason,
@@ -1531,15 +1556,42 @@ impl MultiTokenManager {
             serde_json::to_string_pretty(&credentials).context("序列化凭据失败")?
         };
 
-        // 写入文件（在 Tokio runtime 内使用 block_in_place 避免阻塞 worker）
-        // 注意：std::fs::write 不是原子操作，为避免并发调用导致的覆盖问题，
-        // 调用方应确保适当的同步机制
+        // 原子写入：先写临时文件，再 rename 替换目标文件
+        // rename 在同一文件系统上是原子操作，避免进程崩溃导致凭据文件损坏
+        // 解析 symlink 以确保 rename 写入真实目标（而非替换 symlink 本身）
+        let real_path = resolve_symlink_target(&path);
+        let tmp_path = real_path.with_extension("json.tmp");
+
+        let do_atomic_write = || -> anyhow::Result<()> {
+            // 尝试保留原文件权限（避免 umask 导致权限放宽）
+            let original_perms = std::fs::metadata(&real_path).ok().map(|m| m.permissions());
+
+            std::fs::write(&tmp_path, &json)
+                .with_context(|| format!("写入临时凭据文件失败: {:?}", tmp_path))?;
+
+            if let Some(perms) = original_perms {
+                // best-effort：权限复制失败不阻塞回写
+                let _ = std::fs::set_permissions(&tmp_path, perms);
+            }
+
+            // 跨平台原子替换：Windows 上 rename 无法覆盖已存在文件，需先删除
+            #[cfg(windows)]
+            if real_path.exists() {
+                std::fs::remove_file(&real_path).with_context(|| {
+                    format!("删除旧凭据文件失败: {:?}", real_path)
+                })?;
+            }
+
+            std::fs::rename(&tmp_path, &real_path).with_context(|| {
+                format!("原子替换凭据文件失败: {:?} -> {:?}", tmp_path, real_path)
+            })?;
+            Ok(())
+        };
+
         if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::task::block_in_place(|| std::fs::write(&path, &json))
-                .with_context(|| format!("回写凭据文件失败: {:?}", path))?;
+            tokio::task::block_in_place(do_atomic_write)?;
         } else {
-            std::fs::write(&path, &json)
-                .with_context(|| format!("回写凭据文件失败: {:?}", path))?;
+            do_atomic_write()?;
         }
 
         tracing::debug!("已回写凭据到文件: {:?}", path);
@@ -2599,7 +2651,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_multi_token_manager_rate_limited_with_some_disabled_does_not_report_all_disabled() {
+    async fn test_multi_token_manager_rate_limited_with_some_disabled_does_not_report_all_disabled()
+    {
         // 复现线上日志：
         // - total > available（部分凭据被禁用）
         // - 所有可用凭据都被速率限制/冷却暂时挡住

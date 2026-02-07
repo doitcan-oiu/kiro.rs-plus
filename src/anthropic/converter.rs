@@ -62,10 +62,7 @@ fn normalize_json_schema(schema: serde_json::Value) -> serde_json::Value {
         .filter(|v| !v.trim().is_empty())
         .unwrap_or("http://json-schema.org/draft-07/schema#")
         .to_string();
-    obj.insert(
-        "$schema".to_string(),
-        serde_json::Value::String(schema_uri),
-    );
+    obj.insert("$schema".to_string(), serde_json::Value::String(schema_uri));
 
     // type
     let ty = obj
@@ -141,6 +138,7 @@ pub struct ConversionResult {
 pub enum ConversionError {
     UnsupportedModel(String),
     EmptyMessages,
+    InvalidLastMessageRole(String),
 }
 
 impl std::fmt::Display for ConversionError {
@@ -148,6 +146,9 @@ impl std::fmt::Display for ConversionError {
         match self {
             ConversionError::UnsupportedModel(model) => write!(f, "模型不支持: {}", model),
             ConversionError::EmptyMessages => write!(f, "消息列表为空"),
+            ConversionError::InvalidLastMessageRole(role) => {
+                write!(f, "最后一条消息角色必须为 user，实际为: {}", role)
+            }
         }
     }
 }
@@ -175,8 +176,12 @@ fn extract_session_id(user_id: &str) -> Option<String> {
     None
 }
 
-/// 收集历史消息中使用的所有工具名称
+/// 收集历史消息中使用的所有工具名称（小写去重）
+///
+/// 返回去重后的工具名称列表，保留原始大小写（首次出现的形式），
+/// 但通过小写比较避免 `read` / `Read` 这类变体重复。
 fn collect_history_tool_names(history: &[Message]) -> Vec<String> {
+    let mut seen_lowercase = std::collections::HashSet::new();
     let mut tool_names = Vec::new();
 
     for msg in history {
@@ -184,7 +189,7 @@ fn collect_history_tool_names(history: &[Message]) -> Vec<String> {
             && let Some(ref tool_uses) = assistant_msg.assistant_response_message.tool_uses
         {
             for tool_use in tool_uses {
-                if !tool_names.contains(&tool_use.name) {
+                if seen_lowercase.insert(tool_use.name.to_lowercase()) {
                     tool_names.push(tool_use.name.clone());
                 }
             }
@@ -236,8 +241,13 @@ pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, Conver
     // 4. 确定触发类型
     let chat_trigger_type = determine_chat_trigger_type(req);
 
-    // 5. 处理最后一条消息作为 current_message
+    // 5. 处理最后一条消息作为 current_message（必须为 user 角色）
     let last_message = req.messages.last().unwrap();
+    if last_message.role != "user" {
+        return Err(ConversionError::InvalidLastMessageRole(
+            last_message.role.clone(),
+        ));
+    }
     let (text_content, images, tool_results) = process_message_content(&last_message.content)?;
 
     // 6. 转换工具定义
@@ -259,14 +269,16 @@ pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, Conver
     // Kiro API 要求：历史消息中引用的工具必须在 tools 列表中有定义
     // 注意：Kiro 匹配工具名称时忽略大小写，所以这里也需要忽略大小写比较
     let history_tool_names = collect_history_tool_names(&history);
-    let existing_tool_names: std::collections::HashSet<_> = tools
+    let mut existing_tool_names: std::collections::HashSet<_> = tools
         .iter()
         .map(|t| t.tool_specification.name.to_lowercase())
         .collect();
 
     for tool_name in history_tool_names {
-        if !existing_tool_names.contains(&tool_name.to_lowercase()) {
+        let lower = tool_name.to_lowercase();
+        if !existing_tool_names.contains(&lower) {
             tools.push(create_placeholder_tool(&tool_name));
+            existing_tool_names.insert(lower);
         }
     }
 
@@ -603,10 +615,7 @@ fn generate_thinking_prefix(req: &MessagesRequest) -> Option<String> {
             let effort = match raw_effort {
                 "low" | "medium" | "high" => raw_effort,
                 _ => {
-                    tracing::warn!(
-                        "未知的 thinking effort 值 '{}', 回退为 'high'",
-                        raw_effort
-                    );
+                    tracing::warn!("未知的 thinking effort 值 '{}', 回退为 'high'", raw_effort);
                     "high"
                 }
             };
@@ -626,11 +635,9 @@ fn has_thinking_tags(content: &str) -> bool {
 
 /// 检查请求的工具列表中是否包含 Write 或 Edit 工具
 fn has_write_or_edit_tool(req: &MessagesRequest) -> bool {
-    req.tools.as_ref().is_some_and(|tools| {
-        tools
-            .iter()
-            .any(|t| t.name == "Write" || t.name == "Edit")
-    })
+    req.tools
+        .as_ref()
+        .is_some_and(|tools| tools.iter().any(|t| t.name == "Write" || t.name == "Edit"))
 }
 
 /// 构建历史消息
@@ -889,10 +896,7 @@ mod tests {
             map_model("claude-opus-4-5-20250514").unwrap(),
             "claude-opus-4.5"
         );
-        assert_eq!(
-            map_model("claude-opus-4.5").unwrap(),
-            "claude-opus-4.5"
-        );
+        assert_eq!(map_model("claude-opus-4.5").unwrap(), "claude-opus-4.5");
     }
 
     #[test]
@@ -1705,7 +1709,10 @@ mod tests {
             normalized.get("$schema").and_then(|v| v.as_str()),
             Some("http://json-schema.org/draft-07/schema#")
         );
-        assert_eq!(normalized.get("type").and_then(|v| v.as_str()), Some("object"));
+        assert_eq!(
+            normalized.get("type").and_then(|v| v.as_str()),
+            Some("object")
+        );
         assert!(normalized.get("properties").is_some_and(|v| v.is_object()));
         assert!(normalized.get("required").is_some_and(|v| v.is_array()));
         assert!(
@@ -1734,7 +1741,9 @@ mod tests {
 
     #[test]
     fn test_chunked_policy_injected_only_with_write_edit_tools() {
-        use super::super::types::{Message as AnthropicMessage, SystemMessage, Tool as AnthropicTool};
+        use super::super::types::{
+            Message as AnthropicMessage, SystemMessage, Tool as AnthropicTool,
+        };
         use std::collections::HashMap;
 
         let system = vec![SystemMessage {
@@ -1898,5 +1907,77 @@ mod tests {
             "非法 effort 值应回退为 high，实际: {}",
             prefix
         );
+    }
+
+    #[test]
+    fn test_collect_history_tool_names_deduplicates_case_variants() {
+        use crate::kiro::model::requests::tool::ToolUseEntry;
+
+        // 历史中同时出现 "read" 和 "Read"（大小写变体），应只保留首次出现的形式
+        let mut msg1 = AssistantMessage::new("reading...");
+        msg1 = msg1.with_tool_uses(vec![
+            ToolUseEntry::new("t-1", "read").with_input(serde_json::json!({"path": "/a.txt"})),
+        ]);
+
+        let mut msg2 = AssistantMessage::new("reading again...");
+        msg2 = msg2.with_tool_uses(vec![
+            ToolUseEntry::new("t-2", "Read").with_input(serde_json::json!({"path": "/b.txt"})),
+        ]);
+
+        let history = vec![
+            Message::User(HistoryUserMessage::new("go", "claude-sonnet-4.5")),
+            Message::Assistant(HistoryAssistantMessage {
+                assistant_response_message: msg1,
+            }),
+            Message::User(HistoryUserMessage::new("ok", "claude-sonnet-4.5")),
+            Message::Assistant(HistoryAssistantMessage {
+                assistant_response_message: msg2,
+            }),
+        ];
+
+        let tool_names = collect_history_tool_names(&history);
+        // 只应有 1 个条目（首次出现的 "read"）
+        assert_eq!(
+            tool_names.len(),
+            1,
+            "大小写变体应被去重，实际: {:?}",
+            tool_names
+        );
+        assert_eq!(tool_names[0], "read");
+    }
+
+    #[test]
+    fn test_convert_request_rejects_assistant_as_last_message() {
+        use super::super::types::Message as AnthropicMessage;
+
+        let req = MessagesRequest {
+            model: "claude-sonnet-4".to_string(),
+            max_tokens: 1024,
+            messages: vec![
+                AnthropicMessage {
+                    role: "user".to_string(),
+                    content: serde_json::json!("Hello"),
+                },
+                AnthropicMessage {
+                    role: "assistant".to_string(),
+                    content: serde_json::json!("Hi there"),
+                },
+            ],
+            stream: false,
+            system: None,
+            tools: None,
+            tool_choice: None,
+            thinking: None,
+            output_config: None,
+            metadata: None,
+        };
+
+        let err = convert_request(&req).unwrap_err();
+        match err {
+            ConversionError::InvalidLastMessageRole(role) => {
+                assert_eq!(role, "assistant");
+            }
+            other => panic!("期望 InvalidLastMessageRole，实际: {:?}", other),
+        }
     }
 }

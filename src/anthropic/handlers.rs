@@ -2,11 +2,11 @@
 
 use std::convert::Infallible;
 
-use anyhow::Error;
 use crate::kiro::model::events::Event;
 use crate::kiro::model::requests::kiro::KiroRequest;
 use crate::kiro::parser::decoder::EventStreamDecoder;
 use crate::token;
+use anyhow::Error;
 use axum::{
     Json as JsonExtractor,
     body::Body,
@@ -68,7 +68,6 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
 }
 
 /// 对 user_id 进行掩码处理，保护隐私
-
 fn mask_user_id(user_id: Option<&str>) -> String {
     match user_id {
         Some(id) if id.len() > 25 => format!("{}***{}", &id[..13], &id[id.len() - 8..]),
@@ -201,6 +200,10 @@ pub async fn post_messages(
                 ConversionError::EmptyMessages => {
                     ("invalid_request_error", "消息列表为空".to_string())
                 }
+                ConversionError::InvalidLastMessageRole(role) => (
+                    "invalid_request_error",
+                    format!("最后一条消息角色必须为 user，实际为: {}", role),
+                ),
             };
             tracing::warn!("请求转换失败: {}", e);
             return (
@@ -233,7 +236,10 @@ pub async fn post_messages(
     };
 
     #[cfg(feature = "sensitive-logs")]
-    tracing::debug!("Kiro request body: {}", truncate_middle(&request_body, 1200));
+    tracing::debug!(
+        "Kiro request body: {}",
+        truncate_middle(&request_body, 1200)
+    );
     #[cfg(not(feature = "sensitive-logs"))]
     tracing::debug!(
         kiro_request_body_bytes = request_body.len(),
@@ -670,6 +676,10 @@ pub async fn post_messages_cc(
                 ConversionError::EmptyMessages => {
                     ("invalid_request_error", "消息列表为空".to_string())
                 }
+                ConversionError::InvalidLastMessageRole(role) => (
+                    "invalid_request_error",
+                    format!("最后一条消息角色必须为 user，实际为: {}", role),
+                ),
             };
             tracing::warn!("请求转换失败: {}", e);
             return (
@@ -702,7 +712,10 @@ pub async fn post_messages_cc(
     };
 
     #[cfg(feature = "sensitive-logs")]
-    tracing::debug!("Kiro request body: {}", truncate_middle(&request_body, 1200));
+    tracing::debug!(
+        "Kiro request body: {}",
+        truncate_middle(&request_body, 1200)
+    );
     #[cfg(not(feature = "sensitive-logs"))]
     tracing::debug!(
         kiro_request_body_bytes = request_body.len(),

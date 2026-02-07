@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Fixed
+- **[P0] API Key 日志泄露修复** (`src/main.rs`)
+  - info 级别不再打印 API Key 前半段，仅显示末 4 位和长度
+  - 完整前缀仅在 `sensitive-logs` feature 的 debug 级别输出
+- **[P2] 占位工具大小写变体重复插入** (`src/anthropic/converter.rs`)
+  - `collect_history_tool_names` 改为小写去重，避免 `read`/`Read` 等变体重复
+  - 占位工具 push 后同步更新 `existing_tool_names` 集合
+- **[P2] 最后一条消息角色校验** (`src/anthropic/converter.rs`, `src/anthropic/handlers.rs`)
+  - `convert_request` 显式校验最后一条消息 role 必须为 `user`
+  - 新增 `InvalidLastMessageRole` 错误变体，映射为 400 响应
+- **[P2] 凭据回写原子性** (`src/kiro/token_manager.rs`)
+  - `persist_credentials` 改为临时文件 + `rename` 原子替换
+  - 新增 `resolve_symlink_target` 辅助函数：优先 `canonicalize`，失败时用 `read_link` 解析 symlink
+  - 保留原文件权限，防止 umask 导致凭据文件权限放宽
+  - Windows 兼容：`rename` 前先删除已存在的目标文件
+  - 避免进程崩溃或并发调用导致凭据文件损坏
+
 ### Changed
 - 重构 README.md 配置文档，提升新用户上手体验
   - 明确配置文件默认路径：当前工作目录（或通过 `-c`/`--config` 和 `--credentials` 参数指定）

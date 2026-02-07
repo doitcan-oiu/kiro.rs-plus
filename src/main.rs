@@ -158,7 +158,14 @@ async fn main() {
     // 启动服务器
     let addr = format!("{}:{}", config.host, config.port);
     tracing::info!("启动 Anthropic API 端点: {}", addr);
-    tracing::info!("API Key: {}***", &api_key[..(api_key.len() / 2)]);
+    #[cfg(feature = "sensitive-logs")]
+    tracing::debug!("API Key: {}***", &api_key[..(api_key.len() / 2)]);
+    #[cfg(not(feature = "sensitive-logs"))]
+    tracing::info!(
+        "API Key: ***{} (长度: {})",
+        &api_key[api_key.len().saturating_sub(4)..],
+        api_key.len()
+    );
     tracing::info!("可用 API:");
     tracing::info!("  GET  /v1/models");
     tracing::info!("  POST /v1/messages");
