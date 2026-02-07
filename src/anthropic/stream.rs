@@ -477,6 +477,9 @@ pub struct StreamContext {
     pub thinking_block_index: Option<i32>,
     /// 文本块索引（thinking 启用时动态分配）
     pub text_block_index: Option<i32>,
+    /// 是否需要剥离 thinking 内容开头的换行符
+    /// 模型输出 `<thinking>\n` 时，`\n` 可能与标签在同一 chunk 或下一 chunk
+    strip_thinking_leading_newline: bool,
 }
 
 impl StreamContext {
@@ -500,6 +503,7 @@ impl StreamContext {
             thinking_extracted: false,
             thinking_block_index: None,
             text_block_index: None,
+            strip_thinking_leading_newline: false,
         }
     }
 
@@ -643,6 +647,7 @@ impl StreamContext {
 
                     // 进入 thinking 块
                     self.in_thinking_block = true;
+                    self.strip_thinking_leading_newline = true;
                     self.thinking_buffer =
                         self.thinking_buffer[start_pos + "<thinking>".len()..].to_string();
 
@@ -685,6 +690,18 @@ impl StreamContext {
                     break;
                 }
             } else if self.in_thinking_block {
+                // 剥离 <thinking> 标签后紧跟的换行符（可能跨 chunk）
+                if self.strip_thinking_leading_newline {
+                    if self.thinking_buffer.starts_with('\n') {
+                        self.thinking_buffer = self.thinking_buffer[1..].to_string();
+                        self.strip_thinking_leading_newline = false;
+                    } else if !self.thinking_buffer.is_empty() {
+                        // buffer 非空但不以 \n 开头，不再需要剥离
+                        self.strip_thinking_leading_newline = false;
+                    }
+                    // buffer 为空时保留标志，等待下一个 chunk
+                }
+
                 // 在 thinking 块内，查找 </thinking> 结束标签（跳过被反引号包裹的）
                 if let Some(end_pos) = find_real_thinking_end_tag(&self.thinking_buffer) {
                     // 提取 thinking 内容
@@ -713,8 +730,9 @@ impl StreamContext {
                         }
                     }
 
+                    // 剥离 `</thinking>\n\n`（find_real_thinking_end_tag 已确认 \n\n 存在）
                     self.thinking_buffer =
-                        self.thinking_buffer[end_pos + "</thinking>".len()..].to_string();
+                        self.thinking_buffer[end_pos + "</thinking>\n\n".len()..].to_string();
                 } else {
                     // 没有找到结束标签，发送当前缓冲区内容作为 thinking_delta
                     // 保留可能是部分标签的内容
@@ -866,7 +884,7 @@ impl StreamContext {
 
                 // 把结束标签后的内容当作普通文本（通常为空或空白）
                 let after_pos = end_pos + "</thinking>".len();
-                let remaining = self.thinking_buffer[after_pos..].to_string();
+                let remaining = self.thinking_buffer[after_pos..].trim_start().to_string();
                 self.thinking_buffer.clear();
                 if !remaining.is_empty() {
                     events.extend(self.create_text_delta_events(&remaining));
@@ -875,7 +893,7 @@ impl StreamContext {
         }
 
         // thinking 模式下，process_content_with_thinking 可能会为了探测 `<thinking>` 而暂存一小段尾部文本。
-        // 如果此时直接开始 tool_use，状态机会自动关闭 text block，导致这段“待输出文本”看起来被 tool_use 吞掉。
+        // 如果此时直接开始 tool_use，状态机会自动关闭 text block，导致这段"待输出文本"看起来被 tool_use 吞掉。
         // 约束：只在尚未进入 thinking block、且 thinking 尚未被提取时，将缓冲区当作普通文本 flush。
         if self.thinking_enabled
             && !self.in_thinking_block
@@ -974,7 +992,7 @@ impl StreamContext {
 
                     // 把结束标签后的内容当作普通文本（通常为空或空白）
                     let after_pos = end_pos + "</thinking>".len();
-                    let remaining = self.thinking_buffer[after_pos..].to_string();
+                    let remaining = self.thinking_buffer[after_pos..].trim_start().to_string();
                     self.thinking_buffer.clear();
                     self.in_thinking_block = false;
                     self.thinking_extracted = true;
@@ -1519,5 +1537,119 @@ mod tests {
             }),
             "`</thinking>` should be filtered during final flush"
         );
+    }
+
+    #[test]
+    fn test_thinking_strips_leading_newline_same_chunk() {
+        // <thinking>\n 在同一个 chunk 中，\n 应被剥离
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true);
+        let _initial_events = ctx.generate_initial_events();
+
+        let events = ctx.process_assistant_response("<thinking>\nHello world");
+
+        // 找到所有 thinking_delta 事件
+        let thinking_deltas: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.event == "content_block_delta" && e.data["delta"]["type"] == "thinking_delta"
+            })
+            .collect();
+
+        // 拼接所有 thinking 内容
+        let full_thinking: String = thinking_deltas
+            .iter()
+            .map(|e| e.data["delta"]["thinking"].as_str().unwrap_or(""))
+            .collect();
+
+        assert!(
+            !full_thinking.starts_with('\n'),
+            "thinking content should not start with \\n, got: {:?}",
+            full_thinking
+        );
+    }
+
+    #[test]
+    fn test_thinking_strips_leading_newline_cross_chunk() {
+        // <thinking> 在第一个 chunk 末尾，\n 在第二个 chunk 开头
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true);
+        let _initial_events = ctx.generate_initial_events();
+
+        let events1 = ctx.process_assistant_response("<thinking>");
+        let events2 = ctx.process_assistant_response("\nHello world");
+
+        let mut all_events = Vec::new();
+        all_events.extend(events1);
+        all_events.extend(events2);
+
+        let thinking_deltas: Vec<_> = all_events
+            .iter()
+            .filter(|e| {
+                e.event == "content_block_delta" && e.data["delta"]["type"] == "thinking_delta"
+            })
+            .collect();
+
+        let full_thinking: String = thinking_deltas
+            .iter()
+            .map(|e| e.data["delta"]["thinking"].as_str().unwrap_or(""))
+            .collect();
+
+        assert!(
+            !full_thinking.starts_with('\n'),
+            "thinking content should not start with \\n across chunks, got: {:?}",
+            full_thinking
+        );
+    }
+
+    #[test]
+    fn test_thinking_no_strip_when_no_leading_newline() {
+        // <thinking> 后直接跟内容（无 \n），内容应完整保留
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true);
+        let _initial_events = ctx.generate_initial_events();
+
+        let events = ctx.process_assistant_response("<thinking>abc</thinking>\n\ntext");
+
+        let thinking_deltas: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.event == "content_block_delta" && e.data["delta"]["type"] == "thinking_delta"
+            })
+            .collect();
+
+        let full_thinking: String = thinking_deltas
+            .iter()
+            .filter(|e| !e.data["delta"]["thinking"].as_str().unwrap_or("").is_empty())
+            .map(|e| e.data["delta"]["thinking"].as_str().unwrap_or(""))
+            .collect();
+
+        assert_eq!(full_thinking, "abc", "thinking content should be 'abc'");
+    }
+
+    #[test]
+    fn test_text_after_thinking_strips_leading_newlines() {
+        // `</thinking>\n\n` 后的文本不应以 \n\n 开头
+        let mut ctx = StreamContext::new_with_thinking("test-model", 1, true);
+        let _initial_events = ctx.generate_initial_events();
+
+        let events =
+            ctx.process_assistant_response("<thinking>\nabc</thinking>\n\n你好");
+
+        let text_deltas: Vec<_> = events
+            .iter()
+            .filter(|e| {
+                e.event == "content_block_delta" && e.data["delta"]["type"] == "text_delta"
+            })
+            .collect();
+
+        let full_text: String = text_deltas
+            .iter()
+            .map(|e| e.data["delta"]["text"].as_str().unwrap_or(""))
+            .collect();
+
+        assert!(
+            !full_text.starts_with('\n'),
+            "text after thinking should not start with \\n, got: {:?}",
+            full_text
+        );
+        assert_eq!(full_text, "你好");
     }
 }
