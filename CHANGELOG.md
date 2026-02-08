@@ -28,6 +28,15 @@
 - **[P2] 占位工具大小写变体重复插入** (`src/anthropic/converter.rs`)
   - `collect_history_tool_names` 改为小写去重，避免 `read`/`Read` 等变体重复
   - 占位工具 push 后同步更新 `existing_tool_names` 集合
+- **[P1] 统计与缓存写盘非原子操作** (`src/kiro/token_manager.rs`, `src/admin/service.rs`)
+  - 统计数据和余额缓存改为临时文件 + 原子重命名，防止写入中断导致文件损坏
+- **[P1] stop_reason 覆盖策略可能丢失信息** (`src/anthropic/stream.rs`)
+  - `set_stop_reason()` 改为仅在未设置时生效，避免覆盖更重要的原因（如 `model_context_window_exceeded`）
+- **[P2] snapshot 重复计算 SHA-256** (`src/kiro/token_manager.rs`)
+  - `CredentialEntry` 新增 `refresh_token_hash` 缓存字段
+  - Token 刷新时自动更新哈希，`snapshot()` 优先使用缓存避免重复计算
+- **Clippy 警告修复** (`src/model/config.rs`)
+  - 修复 `field_reassign_with_default` 警告，改用结构体初始化语法
 - **[P2] Assistant Prefill 静默丢弃** (`src/anthropic/converter.rs`, `src/anthropic/handlers.rs`)
   - 末尾 `assistant` 消息（prefill 场景）不再返回 400 错误，改为静默丢弃并回退到最后一条 `user` 消息
   - Claude 4.x 已弃用 assistant prefill，Kiro API 也不支持，转换器在入口处截断消息列表
