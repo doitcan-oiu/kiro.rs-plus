@@ -255,9 +255,11 @@ impl SseStateManager {
         self.has_tool_use = has;
     }
 
-    /// 设置 stop_reason
+    /// 设置 stop_reason（仅在未设置时生效，避免覆盖更重要的原因）
     pub fn set_stop_reason(&mut self, reason: impl Into<String>) {
-        self.stop_reason = Some(reason.into());
+        if self.stop_reason.is_none() {
+            self.stop_reason = Some(reason.into());
+        }
     }
 
     /// 检查是否存在非 thinking 类型的内容块（如 text 或 tool_use）

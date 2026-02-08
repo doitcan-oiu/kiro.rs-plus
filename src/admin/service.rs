@@ -317,8 +317,16 @@ impl AdminService {
 
         match serde_json::to_string_pretty(&map) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(path, json) {
-                    tracing::warn!("保存余额缓存失败: {}", e);
+                // 原子写入：先写临时文件，再重命名
+                let tmp_path = path.with_extension("json.tmp");
+                match std::fs::write(&tmp_path, json) {
+                    Ok(_) => {
+                        if let Err(e) = std::fs::rename(&tmp_path, path) {
+                            tracing::warn!("原子重命名余额缓存失败: {}", e);
+                            let _ = std::fs::remove_file(&tmp_path);
+                        }
+                    }
+                    Err(e) => tracing::warn!("写入临时余额文件失败: {}", e),
                 }
             }
             Err(e) => tracing::warn!("序列化余额缓存失败: {}", e),

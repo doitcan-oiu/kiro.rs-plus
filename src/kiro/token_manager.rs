@@ -491,6 +491,8 @@ struct CredentialEntry {
     success_count: u64,
     /// 最后一次 API 调用时间（RFC3339 格式）
     last_used_at: Option<String>,
+    /// refreshToken 的 SHA-256 哈希缓存（避免 snapshot 重复计算）
+    refresh_token_hash: Option<String>,
 }
 
 /// 自愈原因（内部使用，用于判断是否可自动恢复）
@@ -797,6 +799,7 @@ impl MultiTokenManager {
                     fingerprint,
                     success_count: 0,
                     last_used_at: None,
+                    refresh_token_hash: None,
                 }
             })
             .collect();
@@ -1033,6 +1036,7 @@ impl MultiTokenManager {
     ///
     /// - priority 模式：选择优先级最高（priority 最小）的可用凭据
     /// - balanced 模式：轮询选择可用凭据
+    #[allow(dead_code)]
     fn select_next_credential(&self) -> Option<(u64, KiroCredentials)> {
         let entries = self.entries.lock();
         let available: Vec<_> = entries.iter().filter(|e| !e.disabled).collect();
@@ -1545,6 +1549,8 @@ impl MultiTokenManager {
                     let mut entries = self.entries.lock();
                     if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
                         entry.credentials = new_creds.clone();
+                        // 更新哈希缓存
+                        entry.refresh_token_hash = new_creds.refresh_token.as_deref().map(sha256_hex);
                     }
                 }
 
@@ -1743,11 +1749,19 @@ impl MultiTokenManager {
 
         match serde_json::to_string_pretty(&stats) {
             Ok(json) => {
-                if let Err(e) = std::fs::write(&path, json) {
-                    tracing::warn!("保存统计缓存失败: {}", e);
-                } else {
-                    *self.last_stats_save_at.lock() = Some(Instant::now());
-                    self.stats_dirty.store(false, Ordering::Relaxed);
+                // 原子写入：先写临时文件，再重命名
+                let tmp_path = path.with_extension("json.tmp");
+                match std::fs::write(&tmp_path, json) {
+                    Ok(_) => {
+                        if let Err(e) = std::fs::rename(&tmp_path, &path) {
+                            tracing::warn!("原子重命名统计缓存失败: {}", e);
+                            let _ = std::fs::remove_file(&tmp_path);
+                        } else {
+                            *self.last_stats_save_at.lock() = Some(Instant::now());
+                            self.stats_dirty.store(false, Ordering::Relaxed);
+                        }
+                    }
+                    Err(e) => tracing::warn!("写入临时统计文件失败: {}", e),
                 }
             }
             Err(e) => tracing::warn!("序列化统计数据失败: {}", e),
@@ -2079,25 +2093,32 @@ impl MultiTokenManager {
         ManagerSnapshot {
             entries: entries
                 .iter()
-                .map(|e| CredentialEntrySnapshot {
-                    id: e.id,
-                    priority: e.credentials.priority,
-                    disabled: e.disabled,
-                    disable_reason: e.disable_reason,
-                    failure_count: e.failure_count,
-                    auth_method: e.credentials.auth_method.as_deref().map(|m| {
-                        if m.eq_ignore_ascii_case("builder-id") || m.eq_ignore_ascii_case("iam") {
-                            "idc".to_string()
-                        } else {
-                            m.to_string()
-                        }
-                    }),
-                    has_profile_arn: e.credentials.profile_arn.is_some(),
-                    expires_at: e.credentials.expires_at.clone(),
-                    refresh_token_hash: e.credentials.refresh_token.as_deref().map(sha256_hex),
-                    email: e.credentials.email.clone(),
-                    success_count: e.success_count,
-                    last_used_at: e.last_used_at.clone(),
+                .map(|e| {
+                    // 使用缓存的哈希，如果不存在则计算并缓存
+                    let hash = e.refresh_token_hash.clone().or_else(|| {
+                        e.credentials.refresh_token.as_deref().map(sha256_hex)
+                    });
+
+                    CredentialEntrySnapshot {
+                        id: e.id,
+                        priority: e.credentials.priority,
+                        disabled: e.disabled,
+                        disable_reason: e.disable_reason,
+                        failure_count: e.failure_count,
+                        auth_method: e.credentials.auth_method.as_deref().map(|m| {
+                            if m.eq_ignore_ascii_case("builder-id") || m.eq_ignore_ascii_case("iam") {
+                                "idc".to_string()
+                            } else {
+                                m.to_string()
+                            }
+                        }),
+                        has_profile_arn: e.credentials.profile_arn.is_some(),
+                        expires_at: e.credentials.expires_at.clone(),
+                        refresh_token_hash: hash,
+                        email: e.credentials.email.clone(),
+                        success_count: e.success_count,
+                        last_used_at: e.last_used_at.clone(),
+                    }
                 })
                 .collect(),
             total: entries.len(),
@@ -2195,6 +2216,8 @@ impl MultiTokenManager {
                     let mut entries = self.entries.lock();
                     if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
                         entry.credentials = new_creds.clone();
+                        // 更新哈希缓存
+                        entry.refresh_token_hash = new_creds.refresh_token.as_deref().map(sha256_hex);
                     }
                 }
                 // 持久化失败只记录警告，不影响本次请求
@@ -2313,6 +2336,7 @@ impl MultiTokenManager {
                 fingerprint,
                 success_count: 0,
                 last_used_at: None,
+                refresh_token_hash: None,
             });
         }
 
@@ -2527,6 +2551,8 @@ impl MultiTokenManager {
                     let mut entries = self.entries.lock();
                     if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
                         entry.credentials = new_creds.clone();
+                        // 更新哈希缓存
+                        entry.refresh_token_hash = new_creds.refresh_token.as_deref().map(sha256_hex);
                     }
                 }
 

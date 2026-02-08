@@ -85,6 +85,10 @@ pub struct Config {
     #[serde(default = "default_load_balancing_mode")]
     pub load_balancing_mode: String,
 
+    /// 输入压缩配置
+    #[serde(default)]
+    pub compression: CompressionConfig,
+
     /// 配置文件路径（运行时元数据，不写入 JSON）
     #[serde(skip)]
     config_path: Option<PathBuf>,
@@ -127,6 +131,90 @@ fn default_load_balancing_mode() -> String {
     "priority".to_string()
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_thinking_strategy() -> String {
+    "discard".to_string()
+}
+
+fn default_8000() -> usize {
+    8000
+}
+
+fn default_80() -> usize {
+    80
+}
+
+fn default_40() -> usize {
+    40
+}
+
+fn default_6000() -> usize {
+    6000
+}
+
+fn default_4000() -> usize {
+    4000
+}
+
+/// 输入压缩配置
+///
+/// 控制请求体在协议转换后、发送到上游前的多层压缩策略。
+/// 所有阈值均可通过配置文件调整，默认开启。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompressionConfig {
+    /// 总开关，默认 true
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// 空白压缩（连续空行、行尾空格），默认 true
+    #[serde(default = "default_true")]
+    pub whitespace_compression: bool,
+    /// thinking 块处理策略: "discard" | "truncate" | "keep"
+    #[serde(default = "default_thinking_strategy")]
+    pub thinking_strategy: String,
+    /// tool_result 截断阈值（字符数），默认 8000
+    #[serde(default = "default_8000")]
+    pub tool_result_max_chars: usize,
+    /// 智能截断保留头部行数，默认 80
+    #[serde(default = "default_80")]
+    pub tool_result_head_lines: usize,
+    /// 智能截断保留尾部行数，默认 40
+    #[serde(default = "default_40")]
+    pub tool_result_tail_lines: usize,
+    /// tool_use input 截断阈值（字符数），默认 6000
+    #[serde(default = "default_6000")]
+    pub tool_use_input_max_chars: usize,
+    /// 工具描述截断阈值（字符数），覆盖原 10000 硬编码，默认 4000
+    #[serde(default = "default_4000")]
+    pub tool_description_max_chars: usize,
+    /// 历史最大轮数（0=不限）
+    #[serde(default)]
+    pub max_history_turns: usize,
+    /// 历史最大字符数（0=不限）
+    #[serde(default)]
+    pub max_history_chars: usize,
+}
+
+impl Default for CompressionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            whitespace_compression: true,
+            thinking_strategy: default_thinking_strategy(),
+            tool_result_max_chars: default_8000(),
+            tool_result_head_lines: default_80(),
+            tool_result_tail_lines: default_40(),
+            tool_use_input_max_chars: default_6000(),
+            tool_description_max_chars: default_4000(),
+            max_history_turns: 0,
+            max_history_chars: 0,
+        }
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -148,6 +236,7 @@ impl Default for Config {
             admin_api_key: None,
             credential_rpm: None,
             load_balancing_mode: default_load_balancing_mode(),
+            compression: CompressionConfig::default(),
             config_path: None,
         }
     }
@@ -164,9 +253,10 @@ impl Config {
         let path = path.as_ref();
         if !path.exists() {
             // 配置文件不存在，返回默认配置
-            let mut config = Self::default();
-            config.config_path = Some(path.to_path_buf());
-            return Ok(config);
+            return Ok(Self {
+                config_path: Some(path.to_path_buf()),
+                ..Default::default()
+            });
         }
 
         let content = fs::read_to_string(path)?;
