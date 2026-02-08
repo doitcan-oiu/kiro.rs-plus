@@ -13,7 +13,11 @@ fn main() -> anyhow::Result<()> {
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("找不到 request_body"))?;
 
-    println!("原始请求体大小: {} bytes ({:.1} KB)", body_str.len(), body_str.len() as f64 / 1024.0);
+    println!(
+        "原始请求体大小: {} bytes ({:.1} KB)",
+        body_str.len(),
+        body_str.len() as f64 / 1024.0
+    );
 
     let req: Value = serde_json::from_str(body_str)?;
 
@@ -39,21 +43,21 @@ fn main() -> anyhow::Result<()> {
                         total_chars += text.len();
                     }
                     // 统计 tool_result
-                    if item["type"].as_str() == Some("tool_result") {
-                        if let Some(result_content) = item["content"].as_array() {
-                            for result_item in result_content {
-                                if let Some(text) = result_item["text"].as_str() {
-                                    tool_result_chars += text.len();
-                                }
+                    if item["type"].as_str() == Some("tool_result")
+                        && let Some(result_content) = item["content"].as_array()
+                    {
+                        for result_item in result_content {
+                            if let Some(text) = result_item["text"].as_str() {
+                                tool_result_chars += text.len();
                             }
                         }
                     }
                     // 统计 tool_use
-                    if item["type"].as_str() == Some("tool_use") {
-                        if let Some(input) = item["input"].as_object() {
-                            let input_str = serde_json::to_string(input).unwrap_or_default();
-                            tool_use_chars += input_str.len();
-                        }
+                    if item["type"].as_str() == Some("tool_use")
+                        && let Some(input) = item["input"].as_object()
+                    {
+                        let input_str = serde_json::to_string(input).unwrap_or_default();
+                        tool_use_chars += input_str.len();
                     }
                 }
             }
@@ -61,9 +65,21 @@ fn main() -> anyhow::Result<()> {
 
         println!("  - user: {}", user_count);
         println!("  - assistant: {}", assistant_count);
-        println!("  - 文本字符数: {} ({:.1} KB)", total_chars, total_chars as f64 / 1024.0);
-        println!("  - tool_result 字符数: {} ({:.1} KB)", tool_result_chars, tool_result_chars as f64 / 1024.0);
-        println!("  - tool_use input 字符数: {} ({:.1} KB)", tool_use_chars, tool_use_chars as f64 / 1024.0);
+        println!(
+            "  - 文本字符数: {} ({:.1} KB)",
+            total_chars,
+            total_chars as f64 / 1024.0
+        );
+        println!(
+            "  - tool_result 字符数: {} ({:.1} KB)",
+            tool_result_chars,
+            tool_result_chars as f64 / 1024.0
+        );
+        println!(
+            "  - tool_use input 字符数: {} ({:.1} KB)",
+            tool_use_chars,
+            tool_use_chars as f64 / 1024.0
+        );
 
         // 模拟历史截断
         let max_history_turns = 80;
@@ -81,10 +97,17 @@ fn main() -> anyhow::Result<()> {
         }
 
         let total_content_chars = total_chars + tool_result_chars + tool_use_chars;
-        println!("  - 总内容字符数: {} ({:.1} KB)", total_content_chars, total_content_chars as f64 / 1024.0);
+        println!(
+            "  - 总内容字符数: {} ({:.1} KB)",
+            total_content_chars,
+            total_content_chars as f64 / 1024.0
+        );
 
         if total_content_chars > max_history_chars {
-            println!("  - 字符数超限: {} > {}", total_content_chars, max_history_chars);
+            println!(
+                "  - 字符数超限: {} > {}",
+                total_content_chars, max_history_chars
+            );
         } else {
             println!("  - 字符数未超限");
         }
@@ -93,7 +116,11 @@ fn main() -> anyhow::Result<()> {
     if let Some(tools) = req["tools"].as_array() {
         let tools_str = serde_json::to_string(tools).unwrap_or_default();
         println!("\n工具数量: {}", tools.len());
-        println!("工具定义总大小: {} bytes ({:.1} KB)", tools_str.len(), tools_str.len() as f64 / 1024.0);
+        println!(
+            "工具定义总大小: {} bytes ({:.1} KB)",
+            tools_str.len(),
+            tools_str.len() as f64 / 1024.0
+        );
 
         // 统计每个工具描述的大小
         let mut total_desc_chars = 0;
@@ -102,7 +129,11 @@ fn main() -> anyhow::Result<()> {
                 total_desc_chars += desc.len();
             }
         }
-        println!("工具描述总字符数: {} ({:.1} KB)", total_desc_chars, total_desc_chars as f64 / 1024.0);
+        println!(
+            "工具描述总字符数: {} ({:.1} KB)",
+            total_desc_chars,
+            total_desc_chars as f64 / 1024.0
+        );
     }
 
     println!("\n=== 体积分析 ===");

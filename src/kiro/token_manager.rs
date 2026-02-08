@@ -789,6 +789,7 @@ impl MultiTokenManager {
                     .unwrap_or_else(|| format!("credential-{}", id));
                 let fingerprint = Fingerprint::generate_from_seed(&fingerprint_seed);
 
+                let refresh_token_hash = cred.refresh_token.as_deref().map(sha256_hex);
                 CredentialEntry {
                     id,
                     credentials: cred,
@@ -799,7 +800,7 @@ impl MultiTokenManager {
                     fingerprint,
                     success_count: 0,
                     last_used_at: None,
-                    refresh_token_hash: None,
+                    refresh_token_hash,
                 }
             })
             .collect();
@@ -2280,13 +2281,11 @@ impl MultiTokenManager {
         let duplicate_exists = {
             let entries = self.entries.lock();
             entries.iter().any(|entry| {
-                entry
-                    .credentials
-                    .refresh_token
-                    .as_deref()
-                    .map(sha256_hex)
-                    .as_deref()
-                    == Some(new_refresh_token_hash.as_str())
+                let hash = entry
+                    .refresh_token_hash
+                    .clone()
+                    .or_else(|| entry.credentials.refresh_token.as_deref().map(sha256_hex));
+                hash.as_deref() == Some(new_refresh_token_hash.as_str())
             })
         };
         if duplicate_exists {
@@ -2340,7 +2339,7 @@ impl MultiTokenManager {
                 fingerprint,
                 success_count: 0,
                 last_used_at: None,
-                refresh_token_hash: None,
+                refresh_token_hash: new_cred.refresh_token.as_deref().map(sha256_hex),
             });
         }
 

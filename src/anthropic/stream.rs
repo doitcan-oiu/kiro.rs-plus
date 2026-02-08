@@ -255,10 +255,34 @@ impl SseStateManager {
         self.has_tool_use = has;
     }
 
-    /// 设置 stop_reason（仅在未设置时生效，避免覆盖更重要的原因）
+    /// stop_reason 优先级（索引越小优先级越高）
+    const STOP_REASON_PRIORITY: &'static [&'static str] = &[
+        "model_context_window_exceeded",
+        "max_tokens",
+        "tool_use",
+        "end_turn",
+    ];
+
+    /// 获取 stop_reason 的优先级（越小越高，未知原因返回 usize::MAX）
+    fn stop_reason_priority(reason: &str) -> usize {
+        Self::STOP_REASON_PRIORITY
+            .iter()
+            .position(|&r| r == reason)
+            .unwrap_or(usize::MAX)
+    }
+
+    /// 设置 stop_reason（高优先级原因可覆盖低优先级原因）
+    ///
+    /// 优先级从高到低：model_context_window_exceeded > max_tokens > tool_use > end_turn
     pub fn set_stop_reason(&mut self, reason: impl Into<String>) {
-        if self.stop_reason.is_none() {
-            self.stop_reason = Some(reason.into());
+        let reason = reason.into();
+        let new_priority = Self::stop_reason_priority(&reason);
+        let should_set = match &self.stop_reason {
+            None => true,
+            Some(current) => new_priority < Self::stop_reason_priority(current),
+        };
+        if should_set {
+            self.stop_reason = Some(reason);
         }
     }
 
@@ -1888,5 +1912,80 @@ mod tests {
             message_delta.data["delta"]["stop_reason"], "tool_use",
             "stop_reason should be tool_use when tool_use is present"
         );
+    }
+
+    #[test]
+    fn test_stop_reason_priority_high_overrides_low() {
+        let mut manager = SseStateManager::new();
+
+        // 先设置低优先级
+        manager.set_stop_reason("end_turn");
+        assert_eq!(manager.stop_reason, Some("end_turn".to_string()));
+
+        // 高优先级应覆盖
+        manager.set_stop_reason("max_tokens");
+        assert_eq!(manager.stop_reason, Some("max_tokens".to_string()));
+
+        // 更高优先级应覆盖
+        manager.set_stop_reason("model_context_window_exceeded");
+        assert_eq!(
+            manager.stop_reason,
+            Some("model_context_window_exceeded".to_string())
+        );
+    }
+
+    #[test]
+    fn test_stop_reason_priority_low_cannot_override_high() {
+        let mut manager = SseStateManager::new();
+
+        // 先设置高优先级
+        manager.set_stop_reason("model_context_window_exceeded");
+        assert_eq!(
+            manager.stop_reason,
+            Some("model_context_window_exceeded".to_string())
+        );
+
+        // 低优先级不应覆盖
+        manager.set_stop_reason("max_tokens");
+        assert_eq!(
+            manager.stop_reason,
+            Some("model_context_window_exceeded".to_string())
+        );
+
+        manager.set_stop_reason("end_turn");
+        assert_eq!(
+            manager.stop_reason,
+            Some("model_context_window_exceeded".to_string())
+        );
+    }
+
+    #[test]
+    fn test_stop_reason_priority_same_level_no_override() {
+        let mut manager = SseStateManager::new();
+
+        // 先设置 tool_use
+        manager.set_stop_reason("tool_use");
+        assert_eq!(manager.stop_reason, Some("tool_use".to_string()));
+
+        // 同优先级不覆盖
+        manager.set_stop_reason("tool_use");
+        assert_eq!(manager.stop_reason, Some("tool_use".to_string()));
+    }
+
+    #[test]
+    fn test_stop_reason_priority_unknown_reason() {
+        let mut manager = SseStateManager::new();
+
+        // 未知原因应被设置（优先级最低）
+        manager.set_stop_reason("unknown_reason");
+        assert_eq!(manager.stop_reason, Some("unknown_reason".to_string()));
+
+        // 已知原因应覆盖未知原因
+        manager.set_stop_reason("end_turn");
+        assert_eq!(manager.stop_reason, Some("end_turn".to_string()));
+
+        // 未知原因不应覆盖已知原因
+        manager.set_stop_reason("another_unknown");
+        assert_eq!(manager.stop_reason, Some("end_turn".to_string()));
     }
 }

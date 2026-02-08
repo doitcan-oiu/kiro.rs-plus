@@ -227,7 +227,8 @@ fn smart_truncate_by_lines(
     head_lines: usize,
     tail_lines: usize,
 ) -> (String, usize) {
-    if text.len() <= max_chars {
+    let char_count = text.chars().count();
+    if char_count <= max_chars {
         return (text.to_string(), 0);
     }
 
@@ -237,7 +238,7 @@ fn smart_truncate_by_lines(
     if total_lines <= head_lines + tail_lines {
         let half = max_chars / 2;
         let head = safe_char_truncate(text, half);
-        let tail_chars = max_chars.saturating_sub(head.len());
+        let tail_chars = max_chars.saturating_sub(head.chars().count());
         let tail_start = text
             .char_indices()
             .rev()
@@ -245,7 +246,7 @@ fn smart_truncate_by_lines(
             .map(|(i, _)| i)
             .unwrap_or(0);
         let tail = &text[tail_start..];
-        let omitted = text.len().saturating_sub(head.len() + tail.len());
+        let omitted = char_count.saturating_sub(head.chars().count() + tail.chars().count());
         let result = format!("{}\n... [{} chars omitted] ...\n{}", head, omitted, tail);
         let saved = text.len().saturating_sub(result.len());
         return (result, saved);
@@ -254,12 +255,20 @@ fn smart_truncate_by_lines(
     let head_part: String = lines[..head_lines].join("\n");
     let tail_part: String = lines[total_lines - tail_lines..].join("\n");
     let omitted_lines = total_lines - head_lines - tail_lines;
-    let omitted_chars = text.len().saturating_sub(head_part.len() + tail_part.len());
+    let omitted_chars =
+        char_count.saturating_sub(head_part.chars().count() + tail_part.chars().count());
 
-    let result = format!(
+    let mut result = format!(
         "{}\n... [{} lines omitted ({} chars)] ...\n{}",
         head_part, omitted_lines, omitted_chars, tail_part
     );
+
+    // 硬截断兜底：确保结果不超过 max_chars
+    if result.chars().count() > max_chars {
+        let truncated = safe_char_truncate(&result, max_chars);
+        result = truncated.to_string();
+    }
+
     let saved = text.len().saturating_sub(result.len());
     (result, saved)
 }
@@ -313,19 +322,17 @@ fn truncate_tool_result_content(
     let mut saved = 0usize;
 
     for map in content.iter_mut() {
-        if let Some(serde_json::Value::String(text)) = map.get_mut("text") {
-            if text.len() > max_chars {
-                let (truncated, s) =
-                    smart_truncate_by_lines(text, max_chars, head_lines, tail_lines);
-                saved += s;
-                *text = truncated;
-            }
+        if let Some(serde_json::Value::String(text)) = map.get_mut("text")
+            && text.chars().count() > max_chars
+        {
+            let (truncated, s) = smart_truncate_by_lines(text, max_chars, head_lines, tail_lines);
+            saved += s;
+            *text = truncated;
         }
     }
 
     saved
 }
-
 
 // ============ tool_use input 截断 ============
 
@@ -334,13 +341,13 @@ fn compress_tool_use_inputs_pass(state: &mut ConversationState, max_chars: usize
     let mut saved = 0usize;
 
     for msg in &mut state.history {
-        if let Message::Assistant(assistant_msg) = msg {
-            if let Some(ref mut tool_uses) = assistant_msg.assistant_response_message.tool_uses {
-                for tool_use in tool_uses.iter_mut() {
-                    let serialized = serde_json::to_string(&tool_use.input).unwrap_or_default();
-                    if serialized.len() > max_chars {
-                        saved += truncate_json_value_strings(&mut tool_use.input, max_chars);
-                    }
+        if let Message::Assistant(assistant_msg) = msg
+            && let Some(ref mut tool_uses) = assistant_msg.assistant_response_message.tool_uses
+        {
+            for tool_use in tool_uses.iter_mut() {
+                let serialized = serde_json::to_string(&tool_use.input).unwrap_or_default();
+                if serialized.len() > max_chars {
+                    saved += truncate_json_value_strings(&mut tool_use.input, max_chars);
                 }
             }
         }
@@ -381,7 +388,6 @@ fn truncate_json_value_strings(value: &mut serde_json::Value, max_chars: usize) 
 
     saved
 }
-
 
 // ============ 历史截断 ============
 

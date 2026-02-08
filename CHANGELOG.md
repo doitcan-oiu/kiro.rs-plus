@@ -15,14 +15,6 @@
   - 新增 `compression` 配置字段，支持通过 JSON 配置文件调整参数
   - 10 个可配置参数：总开关、空白压缩、thinking 策略、各截断阈值、历史限制
   - 工具描述截断阈值从硬编码 10000 改为可配置（默认 4000）
-
-### Changed
-- `convert_request()` 签名新增 `&CompressionConfig` 参数 (`src/anthropic/converter.rs`)
-- `convert_tools()` 描述截断阈值参数化 (`src/anthropic/converter.rs`)
-- `AppState` 新增 `compression_config` 字段 (`src/anthropic/middleware.rs`)
-- `create_router_with_provider()` 新增 `CompressionConfig` 参数 (`src/anthropic/router.rs`)
-
-### Added
 - **合并 upstream 新功能**: 从 upstream/master 拉取并融合大量新特性
   - **负载均衡模式** (`src/model/config.rs`, `src/kiro/token_manager.rs`, `src/admin/`)
     - 新增 `loadBalancingMode` 配置项，支持 `priority`（默认）和 `balanced`（Least-Used）两种模式
@@ -41,6 +33,23 @@
     - `Config` 新增 `config_path` 字段和 `load()`/`save()` 方法，支持配置回写
   - **前端依赖**: 新增 `@radix-ui/react-checkbox` 组件
 
+### Changed
+- `convert_request()` 签名新增 `&CompressionConfig` 参数 (`src/anthropic/converter.rs`)
+- `convert_tools()` 描述截断阈值参数化 (`src/anthropic/converter.rs`)
+- `AppState` 新增 `compression_config` 字段 (`src/anthropic/middleware.rs`)
+- `create_router_with_provider()` 新增 `CompressionConfig` 参数 (`src/anthropic/router.rs`)
+- 重构 README.md 配置文档，提升新用户上手体验
+  - 明确配置文件默认路径：当前工作目录（或通过 `-c`/`--config` 和 `--credentials` 参数指定）
+  - 添加 JSON 注释警告：移除所有带 `//` 注释的示例，提供可直接复制的配置
+  - 修正字段必填性：仅 `apiKey` 为必填，其他字段均有默认值
+  - 新增命令行参数说明表格（`-c`, `--credentials`, `-h`, `-V`）
+  - 补充遗漏的 `credentialRpm` 字段说明（凭据级 RPM 限流）
+  - 使用表格形式展示配置字段，标注必填/可选和默认值
+- 优化 debug 日志中请求体的输出长度 (`src/anthropic/handlers.rs`)
+  - 新增 `truncate_middle()` 函数：截断字符串中间部分，保留头尾各 1200 字符
+  - 正确处理 UTF-8 多字节字符边界，不会截断中文
+  - 仅在启用 `sensitive-logs` feature 时生效，减少日志噪音
+
 ### Fixed
 - **[P0] API Key 日志泄露修复** (`src/main.rs`)
   - info 级别不再打印 API Key 前半段，仅显示末 4 位和长度
@@ -51,7 +60,7 @@
 - **[P1] 统计与缓存写盘非原子操作** (`src/kiro/token_manager.rs`, `src/admin/service.rs`)
   - 统计数据和余额缓存改为临时文件 + 原子重命名，防止写入中断导致文件损坏
 - **[P1] stop_reason 覆盖策略可能丢失信息** (`src/anthropic/stream.rs`)
-  - `set_stop_reason()` 改为仅在未设置时生效，避免覆盖更重要的原因（如 `model_context_window_exceeded`）
+  - `set_stop_reason()` 改为基于优先级覆盖，高优先级原因可覆盖低优先级原因
 - **[P2] snapshot 重复计算 SHA-256** (`src/kiro/token_manager.rs`)
   - `CredentialEntry` 新增 `refresh_token_hash` 缓存字段
   - Token 刷新时自动更新哈希，`snapshot()` 优先使用缓存避免重复计算
@@ -67,21 +76,6 @@
   - 保留原文件权限，防止 umask 导致凭据文件权限放宽
   - Windows 兼容：`rename` 前先删除已存在的目标文件
   - 避免进程崩溃或并发调用导致凭据文件损坏
-
-### Changed
-- 重构 README.md 配置文档，提升新用户上手体验
-  - 明确配置文件默认路径：当前工作目录（或通过 `-c`/`--config` 和 `--credentials` 参数指定）
-  - 添加 JSON 注释警告：移除所有带 `//` 注释的示例，提供可直接复制的配置
-  - 修正字段必填性：仅 `apiKey` 为必填，其他字段均有默认值
-  - 新增命令行参数说明表格（`-c`, `--credentials`, `-h`, `-V`）
-  - 补充遗漏的 `credentialRpm` 字段说明（凭据级 RPM 限流）
-  - 使用表格形式展示配置字段，标注必填/可选和默认值
-- 优化 debug 日志中请求体的输出长度 (`src/anthropic/handlers.rs`)
-  - 新增 `truncate_middle()` 函数：截断字符串中间部分，保留头尾各 1200 字符
-  - 正确处理 UTF-8 多字节字符边界，不会截断中文
-  - 仅在启用 `sensitive-logs` feature 时生效，减少日志噪音
-
-### Fixed
 - 限制 `max_tokens` 最大值为 32000（Kiro 上游限制）
   - 当用户设置超出限制的值时自动调整为 32000
   - 记录 WARN 级别日志，包含原始值和调整后的值
@@ -96,8 +90,6 @@
   - 禁用 reqwest 系统代理探测（仅支持显式 `config.proxy_url`）
   - 新增离线诊断脚本：`tools/diagnose_improper_request.py`
   - 涉及文件：`src/anthropic/converter.rs`、`src/http_client.rs`、`tools/diagnose_improper_request.py`、`.gitignore`
-
-### Changed
 - 优化 400 Bad Request "输入过长" 错误的日志输出 (`src/kiro/provider.rs`)
   - 对于 `CONTENT_LENGTH_EXCEEDS_THRESHOLD` / `Input is too long` 错误，不再输出完整请求体（太占空间且无调试价值）
   - 改为记录 `request_body_bytes`（字节数）和 `estimated_input_tokens`（估算 token 数）
@@ -106,7 +98,6 @@
     - 其他字符（英文等）: token 数 = 字符数 / 3.5
   - 新增 `is_input_too_long()` 和 `is_cjk_char()` 辅助函数
 
-### Added
 - 新增多维度设备指纹系统 (`src/kiro/fingerprint.rs`)
   - 每个凭据生成独立的确定性指纹，模拟真实 Kiro IDE 客户端
   - 支持 10+ 维度设备信息：SDK 版本、Kiro 版本、Node.js 版本、操作系统、屏幕分辨率、CPU 核心数、时区等
@@ -139,11 +130,8 @@
   - `start_background_refresh()`: 启动后台 Token 刷新任务
   - `refresh_token_for_credential()`: 带优雅降级的 Token 刷新
   - `record_api_success()` / `record_api_failure()`: 更新速率限制器状态
-
-### Changed
 - `CredentialEntry` 结构体新增 `fingerprint` 字段，每个凭据独立生成设备指纹
 
-### Fixed
 - 修复 IDC 凭据 `fetch_profile_arn` 在某些 region 返回 `UnknownOperationException` 的问题
   - 新增 `ListAvailableCustomizations` API 作为 `ListProfiles` 的回退方案
   - 支持多 region 尝试：先尝试用户配置的 region，失败则回退到 `us-east-1`
@@ -170,8 +158,6 @@
   - 新增 `inject_profile_arn()` 辅助方法，解析请求体 JSON 并覆盖 `profileArn` 字段
   - 新增 `fetch_profile_arn()` 方法，通过 CodeWhisperer ListProfiles API 获取 profileArn
   - 涉及文件：`src/kiro/provider.rs`, `src/kiro/token_manager.rs`
-
-### Added
 - 新增批量导入 token.json 功能
   - 后端：新增 `POST /api/admin/credentials/import-token-json` 端点
   - 支持解析官方 token.json 格式（含 `provider`、`refreshToken`、`clientId`、`clientSecret` 等字段）
@@ -193,7 +179,6 @@
     - `admin-ui/src/components/import-token-json-dialog.tsx`（新建）
     - `admin-ui/src/components/dashboard.tsx`（添加导入按钮）
 
-### Fixed
 - 修复字符串切片在多字节字符中间切割导致 panic 的风险（DoS 漏洞）
   - `generate_fingerprint()` 和 `has_refresh_token_prefix()` 使用 `floor_char_boundary()` 安全截断
   - 涉及文件：`src/admin/service.rs`, `src/kiro/token_manager.rs`
@@ -213,7 +198,6 @@
   - 使用 let-chains 语法合并嵌套 if 语句
   - 涉及文件：`src/anthropic/stream.rs`
 
-### Changed
 - 增强 400 Bad Request 错误日志，记录完整请求信息
   - 移除请求体截断限制，记录完整的 `request_body`
   - 新增 `request_url` 和 `request_headers` 字段
@@ -228,7 +212,6 @@
   - 新增 `select_best_candidate_id()` 方法实现三级排序逻辑
   - 涉及文件：`src/kiro/token_manager.rs`
 
-### Fixed
 - 修复测试代码使用 `serde_json::json!` 构造 Tool 对象导致的类型不匹配问题
   - 改用 `Tool` 结构体直接构造，确保类型安全
   - 涉及文件：`src/anthropic/websearch.rs`
@@ -237,8 +220,6 @@
   - 避免 NaN 被 `total_cmp` 视为最大值导致错误的凭据选择
   - 避免 NaN 导致 `scored` 被完全过滤后除零 panic
   - 涉及文件：`src/kiro/token_manager.rs`
-
-### Added
 - 新增 `system` 字段格式兼容性支持（`src/anthropic/types.rs`）
   - 支持字符串格式：`"system": "You are a helpful assistant"`（new-api 等网关添加的系统提示词）
   - 支持数组格式：`"system": [{"type": "text", "text": "..."}]`（Claude Code 原生格式）
@@ -246,8 +227,6 @@
   - 新增 6 个单元测试验证格式兼容性
 - 新增请求体大小限制：50MB（`DefaultBodyLimit::max(50 * 1024 * 1024)`）
   - 涉及文件：`src/anthropic/router.rs`
-
-### Changed
 - 调整全局禁用恢复时间：`GLOBAL_DISABLE_RECOVERY_MINUTES` 从 10 分钟降至 5 分钟
   - 加快模型暂时不可用后的自动恢复速度
 - 调整总重试次数硬上限：`MAX_TOTAL_RETRIES` 从 5 降至 3
@@ -257,7 +236,6 @@
   - 移除 30 秒整体超时机制
   - 涉及文件：`src/kiro/token_manager.rs`
 
-### Fixed
 - 修复 assistant 消息仅包含 tool_use 时 content 为空导致 Kiro API 报错的问题
   - 当 text_content 为空且存在 tool_uses 时，使用 "OK" 作为占位符
   - 涉及文件：`src/anthropic/converter.rs`
@@ -266,7 +244,6 @@
   - 移除 `report_model_unavailable()` 和 `disable_all_credentials()` 的 `#[allow(dead_code)]` 标记
   - 现在当检测到该错误时会正确触发全局熔断机制
 
-### Added
 - 新增 WebSearch 工具支持（`src/anthropic/websearch.rs`）
   - 实现 Anthropic WebSearch 请求到 Kiro MCP 的转换
   - 支持 SSE 流式响应，生成完整的搜索结果事件序列
@@ -285,16 +262,12 @@
 - 新增 GitHub Actions Docker 构建工作流（`.github/workflows/docker-build.yaml`）
   - 支持 linux/amd64 和 linux/arm64 双架构
   - 推送到 GitHub Container Registry
-
-### Changed
 - 版本号升级至 2026.1.5
 - TLS 库从 native-tls 切换至 rustls（reqwest 依赖调整）
 - `authMethod` 自动推断：未指定时根据是否有 clientId/clientSecret 自动判断为 idc 或 social
 - 移除 web_search/websearch 工具过滤（`is_unsupported_tool` 现在返回 false）
 
-### Fixed
 - 修复 machineId 格式兼容性问题，支持 UUID 格式自动转换为 64 字符十六进制
-
 ### Removed
 - 移除 `current_id` 概念（后端和前端）
   - 后端：移除 `MultiTokenManager.current_id` 字段和相关方法（`switch_to_next`、`select_highest_priority`、`select_by_balance`、`credentials`）
@@ -303,13 +276,10 @@
   - 前端：移除 `CredentialsStatusResponse.currentId` 和 `CredentialStatusItem.isCurrent`
   - 原因：多用户并发访问时，"当前凭据"概念无意义，凭据选择由 `acquire_context_for_user()` 动态决定
 
-### Added
 - 新增启动时余额初始化功能
   - `initialize_balances()`: 启动时并发查询所有凭据余额并更新缓存
   - 整体超时 30 秒，避免阻塞启动流程
   - 初始化失败或超时时输出警告日志
-
-### Changed
 - 改进凭据选择算法：从单一"使用次数最少"改为两级排序
   - 第一优先级：使用次数最少
   - 第二优先级：余额最多（使用次数相同时）
@@ -319,22 +289,17 @@
   - 前端：移除 Dashboard 中的"当前活跃"统计卡片
   - 统计卡片布局从 3 列调整为 2 列
 
-### Added
 - 新增 `sensitive-logs` feature flag，显式启用才允许打印潜在敏感信息（仅用于排障）
   - 默认关闭：Kiro 请求体只输出长度，凭证只输出摘要信息
   - 启用方式：`cargo build --features sensitive-logs`
 
-### Fixed
 - 修复 SSE 流 ping 保活首次立即触发的问题
   - 使用 `interval_at(Instant::now() + ping_period, ping_period)` 延迟首次触发
   - 避免连接建立后立即发送无意义的 ping 事件
-
-### Changed
 - 改进服务启动错误处理
   - 绑定监听地址失败时输出错误日志并退出（exit code 1）
   - HTTP 服务异常退出时输出错误日志并退出（exit code 1）
 
-### Fixed
 - 修复合并上游后 `CredentialEntry` 结构体字段缺失导致的编译错误
   - 添加 `disable_reason: Option<DisableReason>` 字段（公共 API 展示用）
   - 添加 `auto_heal_reason: Option<AutoHealReason>` 字段（内部自愈逻辑用）
@@ -344,8 +309,6 @@
   - `reset_and_enable()`: 重置时同步清除两个字段
   - 自愈循环：重新启用凭据时同步清除 `disable_reason`
   - `mark_insufficient_balance()`: 清除 `auto_heal_reason` 防止被自愈循环错误恢复
-
-### Changed
 - 重命名内部字段以提高可读性
   - `DisabledReason` → `AutoHealReason`（自愈原因枚举）
   - `disabled_reason` → `auto_heal_reason`（自愈原因字段）
@@ -354,7 +317,6 @@
   - 长度 13-25：保留前4后4字符
   - 长度 ≤ 12：完全掩码为 `***`
 
-### Added
 - 新增缓存余额查询 API（`GET /credentials/balances/cached`）
   - 后端：`CachedBalanceInfo` 结构体、`get_all_cached_balances()` 方法
   - 前端：凭据卡片直接显示缓存余额和更新时间
@@ -375,27 +337,21 @@
   - 新增完整的账号信息类型定义（`AccountAggregateInfo`, `CreditsUsageSummary` 等）
 - 新增 `serde_cbor` 依赖用于 CBOR 编解码
 
-### Fixed
 - 修复手动查询余额后列表页面不显示缓存余额的问题
   - `get_balance()` 成功后调用 `update_balance_cache()` 更新缓存
   - 现在点击"查看余额"后，列表页面会正确显示缓存的余额值
 - 修复关闭余额弹窗后卡片不更新缓存余额的问题
   - 弹窗关闭时调用 `queryClient.invalidateQueries({ queryKey: ['cached-balances'] })`
   - 确保卡片和弹窗使用的两个独立数据源保持同步
-
-### Changed
 - 增强 Token 刷新日志，添加凭证 ID 追踪
   - 新增 `refresh_token_with_id()` 函数支持传入凭证 ID
   - 日志现在包含 `credential_id` 字段，便于多凭据环境下的问题排查
-
-### Changed
 - 调整重试策略：单凭据最大重试次数 3→2，单请求最大重试次数 9→5
   - `MAX_RETRIES_PER_CREDENTIAL`: 3 → 2
   - `MAX_TOTAL_RETRIES`: 9 → 5
   - `MAX_FAILURES_PER_CREDENTIAL`: 3 → 2
   - 减少无效凭据的重试开销，加快故障转移速度
 
-### Added
 - 新增用户亲和性绑定功能：连续对话优先使用同一凭据（基于 `metadata.user_id`）
   - 新增 `src/kiro/affinity.rs` 模块，实现 `UserAffinityManager`
   - 新增 `acquire_context_for_user()` 方法支持亲和性查询

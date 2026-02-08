@@ -310,11 +310,16 @@ impl AdminService {
             None => return,
         };
 
-        // 持有锁期间完成序列化和写入，防止并发损坏
-        let cache = self.balance_cache.lock();
-        let map: HashMap<String, &CachedBalance> =
-            cache.iter().map(|(k, v)| (k.to_string(), v)).collect();
+        // 快速 clone 数据后释放锁，减少锁持有时间
+        let map: HashMap<String, CachedBalance> = {
+            let cache = self.balance_cache.lock();
+            cache
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect()
+        };
 
+        // 锁外执行序列化和文件 IO
         match serde_json::to_string_pretty(&map) {
             Ok(json) => {
                 // 原子写入：先写临时文件，再重命名
