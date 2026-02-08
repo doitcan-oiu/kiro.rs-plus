@@ -2,24 +2,31 @@ use serde_json::Value;
 use std::fs;
 
 fn main() -> anyhow::Result<()> {
-    let path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "/Users/petaflops/Library/Containers/com.tencent.xinWeChat/Data/Documents/xwechat_files/petaflops_d0d1/msg/file/2026-02/request_eaa0a5f5_2026-02-07T15-16-31.json".to_string());
+    let path = std::env::args().nth(1).ok_or_else(|| {
+        anyhow::anyhow!("Usage: cargo run --example test_compression -- <path-to-json>")
+    })?;
 
     let content = fs::read_to_string(&path)?;
     let data: Value = serde_json::from_str(&content)?;
 
-    let body_str = data["request_body"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("找不到 request_body"))?;
+    let (req, raw_body_len) = if let Some(body_str) = data["request_body"].as_str() {
+        (
+            serde_json::from_str::<Value>(body_str)?,
+            Some(body_str.len()),
+        )
+    } else {
+        (data, None)
+    };
 
+    let body_len = match raw_body_len {
+        Some(n) => n,
+        None => serde_json::to_string(&req).unwrap_or_default().len(),
+    };
     println!(
         "原始请求体大小: {} bytes ({:.1} KB)",
-        body_str.len(),
-        body_str.len() as f64 / 1024.0
+        body_len,
+        body_len as f64 / 1024.0
     );
-
-    let req: Value = serde_json::from_str(body_str)?;
 
     if let Some(messages) = req["messages"].as_array() {
         println!("消息数量: {}", messages.len());
@@ -53,10 +60,9 @@ fn main() -> anyhow::Result<()> {
                         }
                     }
                     // 统计 tool_use
-                    if item["type"].as_str() == Some("tool_use")
-                        && let Some(input) = item["input"].as_object()
-                    {
-                        let input_str = serde_json::to_string(input).unwrap_or_default();
+                    if item["type"].as_str() == Some("tool_use") {
+                        let input_str =
+                            serde_json::to_string(&item["input"]).unwrap_or_else(|_| "null".into());
                         tool_use_chars += input_str.len();
                     }
                 }
@@ -125,7 +131,7 @@ fn main() -> anyhow::Result<()> {
         // 统计每个工具描述的大小
         let mut total_desc_chars = 0;
         for tool in tools {
-            if let Some(desc) = tool["input_schema"]["description"].as_str() {
+            if let Some(desc) = tool["description"].as_str() {
                 total_desc_chars += desc.len();
             }
         }
@@ -135,20 +141,6 @@ fn main() -> anyhow::Result<()> {
             total_desc_chars as f64 / 1024.0
         );
     }
-
-    println!("\n=== 体积分析 ===");
-    println!("原始请求体: 622.9 KB");
-    println!("  - 文本消息: 46.1 KB (7.4%)");
-    println!("  - tool_use input: 93.0 KB (14.9%)");
-    println!("  - 工具定义: 62.1 KB (10.0%)");
-    println!("  - 其他（system/metadata/tool_result等）: ~421.7 KB (67.7%)");
-
-    println!("\n=== 压缩效果预估（默认配置）===");
-    println!("✅ 历史截断: 不触发（52 轮 < 80 轮，139 KB < 400 KB）");
-    println!("✅ tool_use input 截断: 可能触发（93 KB，阈值 6 KB/条）");
-    println!("✅ 工具描述截断: 可能触发（62 KB，阈值 4 KB/条）");
-    println!("✅ 空白压缩: 会执行");
-    println!("✅ thinking 丢弃: 会执行（如有）");
 
     Ok(())
 }

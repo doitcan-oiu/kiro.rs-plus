@@ -346,7 +346,7 @@ fn compress_tool_use_inputs_pass(state: &mut ConversationState, max_chars: usize
         {
             for tool_use in tool_uses.iter_mut() {
                 let serialized = serde_json::to_string(&tool_use.input).unwrap_or_default();
-                if serialized.len() > max_chars {
+                if serialized.chars().count() > max_chars {
                     saved += truncate_json_value_strings(&mut tool_use.input, max_chars);
                 }
             }
@@ -362,15 +362,27 @@ fn truncate_json_value_strings(value: &mut serde_json::Value, max_chars: usize) 
 
     match value {
         serde_json::Value::String(s) => {
-            if s.len() > max_chars {
+            let original_char_count = s.chars().count();
+            if original_char_count > max_chars {
                 let original_len = s.len();
-                let truncated = safe_char_truncate(s, max_chars);
-                *s = format!(
+                let truncated = safe_char_truncate(s, max_chars).to_string();
+                let omitted_chars = original_char_count.saturating_sub(max_chars);
+
+                // 仅当“带标记版本”确实更短时才附加标记，避免在边界场景（仅略超阈值）
+                // 反而把字符串变长，导致压缩失效。
+                let with_marker = format!(
                     "{}...[truncated {} chars]",
-                    truncated,
-                    original_len - truncated.len()
+                    truncated.as_str(),
+                    omitted_chars
                 );
-                saved += original_len.saturating_sub(s.len());
+                let new_value = if with_marker.len() < original_len {
+                    with_marker
+                } else {
+                    truncated
+                };
+
+                saved += original_len.saturating_sub(new_value.len());
+                *s = new_value;
             }
         }
         serde_json::Value::Object(map) => {
@@ -628,6 +640,87 @@ mod tests {
         };
         let stats = compress(&mut state, &config);
         assert!(stats.tool_use_input_saved > 0);
+    }
+
+    #[test]
+    fn test_tool_use_input_truncation_does_not_expand_near_threshold() {
+        let long_input = serde_json::json!({
+            "content": "a".repeat(101)
+        });
+        let mut assistant_msg = AssistantMessage::new("using tool");
+        assistant_msg = assistant_msg.with_tool_uses(vec![
+            ToolUseEntry::new("t1", "write").with_input(long_input),
+        ]);
+
+        let mut state = ConversationState::new("test")
+            .with_current_message(CurrentMessage::new(UserInputMessage::new(
+                "next",
+                "claude-sonnet-4.5",
+            )))
+            .with_history(vec![
+                Message::User(HistoryUserMessage::new("do it", "claude-sonnet-4.5")),
+                Message::Assistant(HistoryAssistantMessage {
+                    assistant_response_message: assistant_msg,
+                }),
+            ]);
+
+        let config = CompressionConfig {
+            tool_use_input_max_chars: 100,
+            ..Default::default()
+        };
+        let stats = compress(&mut state, &config);
+        assert!(stats.tool_use_input_saved > 0);
+
+        if let Message::Assistant(a) = &state.history[1]
+            && let Some(tool_uses) = &a.assistant_response_message.tool_uses
+            && let Some(content) = tool_uses[0].input["content"].as_str()
+        {
+            // 101 字符略超阈值时，不应追加标记导致更长；应退化为纯截断
+            let expected = "a".repeat(100);
+            assert_eq!(content, expected.as_str());
+        } else {
+            panic!("tool_use input content should exist");
+        }
+    }
+
+    #[test]
+    fn test_tool_use_input_truncation_unicode_under_limit_is_unchanged() {
+        let original = "你".repeat(60); // 60 chars, but 180 bytes
+        let long_input = serde_json::json!({
+            "content": original.clone()
+        });
+        let mut assistant_msg = AssistantMessage::new("using tool");
+        assistant_msg = assistant_msg.with_tool_uses(vec![
+            ToolUseEntry::new("t1", "write").with_input(long_input),
+        ]);
+
+        let mut state = ConversationState::new("test")
+            .with_current_message(CurrentMessage::new(UserInputMessage::new(
+                "next",
+                "claude-sonnet-4.5",
+            )))
+            .with_history(vec![
+                Message::User(HistoryUserMessage::new("do it", "claude-sonnet-4.5")),
+                Message::Assistant(HistoryAssistantMessage {
+                    assistant_response_message: assistant_msg,
+                }),
+            ]);
+
+        let config = CompressionConfig {
+            tool_use_input_max_chars: 100,
+            ..Default::default()
+        };
+        let stats = compress(&mut state, &config);
+        assert_eq!(stats.tool_use_input_saved, 0);
+
+        if let Message::Assistant(a) = &state.history[1]
+            && let Some(tool_uses) = &a.assistant_response_message.tool_uses
+            && let Some(content) = tool_uses[0].input["content"].as_str()
+        {
+            assert_eq!(content, original.as_str());
+        } else {
+            panic!("tool_use input content should exist");
+        }
     }
 
     #[test]
