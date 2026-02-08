@@ -1550,7 +1550,8 @@ impl MultiTokenManager {
                     if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
                         entry.credentials = new_creds.clone();
                         // 更新哈希缓存
-                        entry.refresh_token_hash = new_creds.refresh_token.as_deref().map(sha256_hex);
+                        entry.refresh_token_hash =
+                            new_creds.refresh_token.as_deref().map(sha256_hex);
                     }
                 }
 
@@ -2095,9 +2096,10 @@ impl MultiTokenManager {
                 .iter()
                 .map(|e| {
                     // 使用缓存的哈希，如果不存在则计算并缓存
-                    let hash = e.refresh_token_hash.clone().or_else(|| {
-                        e.credentials.refresh_token.as_deref().map(sha256_hex)
-                    });
+                    let hash = e
+                        .refresh_token_hash
+                        .clone()
+                        .or_else(|| e.credentials.refresh_token.as_deref().map(sha256_hex));
 
                     CredentialEntrySnapshot {
                         id: e.id,
@@ -2106,7 +2108,8 @@ impl MultiTokenManager {
                         disable_reason: e.disable_reason,
                         failure_count: e.failure_count,
                         auth_method: e.credentials.auth_method.as_deref().map(|m| {
-                            if m.eq_ignore_ascii_case("builder-id") || m.eq_ignore_ascii_case("iam") {
+                            if m.eq_ignore_ascii_case("builder-id") || m.eq_ignore_ascii_case("iam")
+                            {
                                 "idc".to_string()
                             } else {
                                 m.to_string()
@@ -2217,7 +2220,8 @@ impl MultiTokenManager {
                     if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
                         entry.credentials = new_creds.clone();
                         // 更新哈希缓存
-                        entry.refresh_token_hash = new_creds.refresh_token.as_deref().map(sha256_hex);
+                        entry.refresh_token_hash =
+                            new_creds.refresh_token.as_deref().map(sha256_hex);
                     }
                 }
                 // 持久化失败只记录警告，不影响本次请求
@@ -2552,7 +2556,8 @@ impl MultiTokenManager {
                     if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {
                         entry.credentials = new_creds.clone();
                         // 更新哈希缓存
-                        entry.refresh_token_hash = new_creds.refresh_token.as_deref().map(sha256_hex);
+                        entry.refresh_token_hash =
+                            new_creds.refresh_token.as_deref().map(sha256_hex);
                     }
                 }
 

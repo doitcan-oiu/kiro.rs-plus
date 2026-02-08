@@ -3,6 +3,26 @@
 ## [Unreleased]
 
 ### Added
+- **输入压缩管道** (`src/anthropic/compressor.rs`)
+  - 新增 5 层压缩管道，规避 Kiro 上游 ~400KB 请求体大小限制
+  - 空白压缩：连续空行(3+)→2行，行尾空格移除，保留行首缩进
+  - thinking 块处理：支持 discard/truncate/keep 三种策略
+  - tool_result 智能截断：按行截断保留头尾，行数不足时回退字符级截断
+  - tool_use input 截断：递归截断 JSON 值中的大字符串
+  - 历史截断：保留系统消息对，按轮数/字符数从前往后成对移除
+  - 12 个单元测试覆盖所有压缩层和边界条件
+- **CompressionConfig 配置结构体** (`src/model/config.rs`)
+  - 新增 `compression` 配置字段，支持通过 JSON 配置文件调整参数
+  - 10 个可配置参数：总开关、空白压缩、thinking 策略、各截断阈值、历史限制
+  - 工具描述截断阈值从硬编码 10000 改为可配置（默认 4000）
+
+### Changed
+- `convert_request()` 签名新增 `&CompressionConfig` 参数 (`src/anthropic/converter.rs`)
+- `convert_tools()` 描述截断阈值参数化 (`src/anthropic/converter.rs`)
+- `AppState` 新增 `compression_config` 字段 (`src/anthropic/middleware.rs`)
+- `create_router_with_provider()` 新增 `CompressionConfig` 参数 (`src/anthropic/router.rs`)
+
+### Added
 - **合并 upstream 新功能**: 从 upstream/master 拉取并融合大量新特性
   - **负载均衡模式** (`src/model/config.rs`, `src/kiro/token_manager.rs`, `src/admin/`)
     - 新增 `loadBalancingMode` 配置项，支持 `priority`（默认）和 `balanced`（Least-Used）两种模式

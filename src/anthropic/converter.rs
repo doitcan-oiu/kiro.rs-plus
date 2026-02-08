@@ -13,6 +13,7 @@ use crate::kiro::model::requests::tool::{
 };
 
 use super::types::{ContentBlock, MessagesRequest, Tool as AnthropicTool};
+use crate::model::config::CompressionConfig;
 
 /// 追加到 Write 工具 description 末尾的内容
 const WRITE_TOOL_DESCRIPTION_SUFFIX: &str = "- IMPORTANT: If the content to write exceeds 150 lines, you MUST only write the first 50 lines using this tool, then use `Edit` tool to append the remaining content in chunks of no more than 50 lines each. If needed, leave a unique placeholder to help append content. Do NOT attempt to write all content at once.";
@@ -214,7 +215,10 @@ fn create_placeholder_tool(name: &str) -> KiroTool {
 }
 
 /// 将 Anthropic 请求转换为 Kiro 请求
-pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, ConversionError> {
+pub fn convert_request(
+    req: &MessagesRequest,
+    compression_config: &CompressionConfig,
+) -> Result<ConversionResult, ConversionError> {
     // 1. 映射模型
     let model_id = map_model(&req.model)
         .ok_or_else(|| ConversionError::UnsupportedModel(req.model.clone()))?;
@@ -261,7 +265,7 @@ pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, Conver
     let (text_content, images, tool_results) = process_message_content(&last_message.content)?;
 
     // 6. 转换工具定义
-    let mut tools = convert_tools(&req.tools);
+    let mut tools = convert_tools(&req.tools, compression_config.tool_description_max_chars);
 
     // 7. 构建历史消息（需要先构建，以便收集历史中使用的工具）
     let mut history = build_history(req, messages, &model_id)?;
@@ -317,12 +321,27 @@ pub fn convert_request(req: &MessagesRequest) -> Result<ConversionResult, Conver
     let current_message = CurrentMessage::new(user_input);
 
     // 13. 构建 ConversationState
-    let conversation_state = ConversationState::new(conversation_id)
+    let mut conversation_state = ConversationState::new(conversation_id)
         .with_agent_continuation_id(agent_continuation_id)
         .with_agent_task_type("vibe")
         .with_chat_trigger_type(chat_trigger_type)
         .with_current_message(current_message)
         .with_history(history);
+
+    // 14. 执行输入压缩
+    if compression_config.enabled {
+        let stats = super::compressor::compress(&mut conversation_state, compression_config);
+        if stats.total_saved() > 0 || stats.history_turns_removed > 0 {
+            tracing::info!(
+                whitespace_saved = stats.whitespace_saved,
+                thinking_saved = stats.thinking_saved,
+                tool_result_saved = stats.tool_result_saved,
+                tool_use_input_saved = stats.tool_use_input_saved,
+                history_turns_removed = stats.history_turns_removed,
+                "输入压缩完成"
+            );
+        }
+    }
 
     Ok(ConversionResult { conversation_state })
 }
@@ -551,7 +570,10 @@ fn remove_orphaned_tool_uses(
 /// 1. 移除下方的 `filter` 过滤逻辑
 /// 2. 添加 web_search 工具的转换逻辑（可能需要特殊处理 `max_uses` 等字段）
 /// 3. 更新相关测试用例
-fn convert_tools(tools: &Option<Vec<AnthropicTool>>) -> Vec<KiroTool> {
+fn convert_tools(
+    tools: &Option<Vec<AnthropicTool>>,
+    max_description_chars: usize,
+) -> Vec<KiroTool> {
     let Some(tools) = tools else {
         return Vec::new();
     };
@@ -588,8 +610,8 @@ fn convert_tools(tools: &Option<Vec<AnthropicTool>>) -> Vec<KiroTool> {
                 description.push_str(suffix);
             }
 
-            // 限制描述长度为 10000 字符（安全截断 UTF-8，单次遍历）
-            let description = match description.char_indices().nth(10000) {
+            // 限制描述长度（安全截断 UTF-8，单次遍历）
+            let description = match description.char_indices().nth(max_description_chars) {
                 Some((idx, _)) => description[..idx].to_string(),
                 None => description,
             };
@@ -865,6 +887,7 @@ fn convert_assistant_message(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::config::CompressionConfig;
 
     #[test]
     fn test_map_model_sonnet() {
@@ -1008,7 +1031,7 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req).unwrap();
+        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
 
         // 验证 tools 列表中包含了历史中使用的工具的占位符定义
         let tools = &result
@@ -1077,7 +1100,7 @@ mod tests {
             }),
         };
 
-        let result = convert_request(&req).unwrap();
+        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
         assert_eq!(
             result.conversation_state.conversation_id,
             "a0662283-7fd3-4399-a7eb-52b9a717ae88"
@@ -1105,7 +1128,7 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req).unwrap();
+        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
         // 验证生成的是有效的 UUID 格式
         assert_eq!(result.conversation_state.conversation_id.len(), 36);
         assert_eq!(
@@ -1414,7 +1437,7 @@ mod tests {
             },
         ];
 
-        let converted = convert_tools(&Some(tools));
+        let converted = convert_tools(&Some(tools), 4000);
 
         // 应该只有 1 个工具（web_search 被过滤）
         assert_eq!(converted.len(), 1, "web_search 应该被过滤");
@@ -1447,7 +1470,7 @@ mod tests {
             },
         ];
 
-        let converted = convert_tools(&Some(tools));
+        let converted = convert_tools(&Some(tools), 4000);
 
         // 所有 web_search 工具都应被过滤
         assert!(converted.is_empty(), "所有 web_search 变体都应被过滤");
@@ -1483,7 +1506,7 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req).unwrap();
+        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
         let tools = &result
             .conversation_state
             .current_message
@@ -1542,7 +1565,7 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req).unwrap();
+        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
         let content = &result
             .conversation_state
             .current_message
@@ -1599,7 +1622,7 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req).unwrap();
+        let result = convert_request(&req, &CompressionConfig::default()).unwrap();
 
         let mut found = false;
         for msg in &result.conversation_state.history {
@@ -1767,7 +1790,7 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req_no_tools).unwrap();
+        let result = convert_request(&req_no_tools, &CompressionConfig::default()).unwrap();
         let first_user = &result.conversation_state.history[0];
         match first_user {
             Message::User(u) => {
@@ -1802,7 +1825,7 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req_with_write).unwrap();
+        let result = convert_request(&req_with_write, &CompressionConfig::default()).unwrap();
         let first_user = &result.conversation_state.history[0];
         match first_user {
             Message::User(u) => {
@@ -1837,7 +1860,8 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req_no_system_with_edit).unwrap();
+        let result =
+            convert_request(&req_no_system_with_edit, &CompressionConfig::default()).unwrap();
         let first_user = &result.conversation_state.history[0];
         match first_user {
             Message::User(u) => {
@@ -1973,7 +1997,7 @@ mod tests {
             metadata: None,
         };
 
-        let result = convert_request(&req);
+        let result = convert_request(&req, &CompressionConfig::default());
         assert!(result.is_ok(), "prefill 场景不应报错: {:?}", result.err());
         let state = result.unwrap().conversation_state;
         assert_eq!(
@@ -2003,7 +2027,7 @@ mod tests {
             metadata: None,
         };
 
-        let err = convert_request(&req).unwrap_err();
+        let err = convert_request(&req, &CompressionConfig::default()).unwrap_err();
         assert!(
             matches!(err, ConversionError::EmptyMessages),
             "只有 assistant 消息时应返回 EmptyMessages，实际: {:?}",
