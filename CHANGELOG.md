@@ -1,5 +1,21 @@
 # Changelog
 
+## [v1.0.6] - 2026-02-10
+
+### Changed
+- **压缩统计日志改用字节单位** (`src/anthropic/handlers.rs`)
+  - 移除不准确的 token 估算（`compressed_input_tokens`、`tokens_saved`），改为直接输出字节数
+  - 字段重命名：`whitespace_saved` → `whitespace_bytes_saved` 等，明确单位语义
+  - 注释更新：说明字节统计用于排查上游 ~400KB 请求体限制
+
+### Added
+- **日志脱敏工具模块** (`src/common/redact.rs`)
+  - `redact_opt_string`: Option<String> 脱敏为存在性表示
+  - `mask_email`: 邮箱脱敏（保留首字符）
+  - `mask_aws_account_id_in_arn`: AWS ARN 中 account id 脱敏
+  - `mask_url_userinfo`: URL userinfo 脱敏
+  - `mask_user_agent_machine_id`: User-Agent 中 machine_id 脱敏
+
 ## [v1.0.5] - 2026-02-09
 
 ### Changed

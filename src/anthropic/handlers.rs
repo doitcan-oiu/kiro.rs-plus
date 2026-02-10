@@ -253,18 +253,15 @@ pub async fn post_messages(
         }
     };
 
-    // 输出压缩统计（含 token 对比）
+    // 输出压缩统计（以字节为单位；用于排查上游 ~400KB 请求体限制）
     if let Some(ref stats) = conversion_result.compression_stats {
-        let saved_tokens = (stats.total_saved() / 4) as i32;
-        let compressed_input_tokens = (estimated_input_tokens - saved_tokens).max(1);
         tracing::info!(
             estimated_input_tokens,
-            compressed_input_tokens,
-            tokens_saved = saved_tokens,
-            whitespace_saved = stats.whitespace_saved,
-            thinking_saved = stats.thinking_saved,
-            tool_result_saved = stats.tool_result_saved,
-            tool_use_input_saved = stats.tool_use_input_saved,
+            bytes_saved_total = stats.total_saved(),
+            whitespace_bytes_saved = stats.whitespace_saved,
+            thinking_bytes_saved = stats.thinking_saved,
+            tool_result_bytes_saved = stats.tool_result_saved,
+            tool_use_input_bytes_saved = stats.tool_use_input_saved,
             history_turns_removed = stats.history_turns_removed,
             history_bytes_saved = stats.history_bytes_saved,
             "输入压缩完成"
@@ -775,18 +772,15 @@ pub async fn post_messages_cc(
         }
     };
 
-    // 输出压缩统计（含 token 对比）
+    // 输出压缩统计（以字节为单位；用于排查上游 ~400KB 请求体限制）
     if let Some(ref stats) = conversion_result.compression_stats {
-        let saved_tokens = (stats.total_saved() / 4) as i32;
-        let compressed_input_tokens = (estimated_input_tokens - saved_tokens).max(1);
         tracing::info!(
             estimated_input_tokens,
-            compressed_input_tokens,
-            tokens_saved = saved_tokens,
-            whitespace_saved = stats.whitespace_saved,
-            thinking_saved = stats.thinking_saved,
-            tool_result_saved = stats.tool_result_saved,
-            tool_use_input_saved = stats.tool_use_input_saved,
+            bytes_saved_total = stats.total_saved(),
+            whitespace_bytes_saved = stats.whitespace_saved,
+            thinking_bytes_saved = stats.thinking_saved,
+            tool_result_bytes_saved = stats.tool_result_saved,
+            tool_use_input_bytes_saved = stats.tool_use_input_saved,
             history_turns_removed = stats.history_turns_removed,
             history_bytes_saved = stats.history_bytes_saved,
             "输入压缩完成"
