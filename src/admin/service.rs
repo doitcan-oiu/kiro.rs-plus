@@ -73,6 +73,8 @@ impl AdminService {
                 email: entry.email,
                 success_count: entry.success_count,
                 last_used_at: entry.last_used_at.clone(),
+                has_proxy: entry.has_proxy,
+                proxy_url: entry.proxy_url,
             })
             .collect();
 
@@ -201,6 +203,9 @@ impl AdminService {
             api_region: req.api_region,
             machine_id: req.machine_id,
             email: req.email,
+            proxy_url: req.proxy_url,
+            proxy_username: req.proxy_username,
+            proxy_password: req.proxy_password,
         };
 
         // 调用 token_manager 添加凭据
