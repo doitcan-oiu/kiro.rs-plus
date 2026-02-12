@@ -138,6 +138,10 @@ impl KiroProvider {
                     let remaining = resp.usage_limit() - resp.current_usage();
                     tm.update_balance_cache(id, remaining);
                     tracing::debug!("凭据 #{} 余额缓存已刷新: {:.2}", id, remaining);
+                    if remaining < 1.0 {
+                        tm.mark_insufficient_balance(id);
+                        tracing::warn!("凭据 #{} 余额不足 ({:.2})，已主动禁用", id, remaining);
+                    }
                 }
                 Err(e) => {
                     tracing::warn!("凭据 #{} 余额刷新失败: {}", id, e);
@@ -610,6 +614,7 @@ impl KiroProvider {
                 );
 
                 let has_available = self.token_manager.report_quota_exhausted(ctx.id);
+                self.token_manager.update_balance_cache(ctx.id, 0.0);
                 if !has_available {
                     anyhow::bail!(
                         "{} API 请求失败（所有凭据已用尽）: {} {}",

@@ -39,6 +39,21 @@ use crate::kiro::model::usage_limits::UsageLimitsResponse;
 use crate::kiro::rate_limiter::{RateLimitConfig, RateLimiter};
 use crate::model::config::Config;
 
+/// 对 user_id 进行掩码处理，保护隐私
+fn mask_user_id(user_id: Option<&str>) -> String {
+    match user_id {
+        Some(id) => {
+            let len = id.len();
+            if len > 12 {
+                format!("{}***{}", &id[..4], &id[len - 4..])
+            } else {
+                "***".to_string()
+            }
+        }
+        None => "None".to_string(),
+    }
+}
+
 /// Token 管理器
 ///
 /// 负责管理凭据和 Token 的自动刷新
@@ -1303,15 +1318,23 @@ impl MultiTokenManager {
                         keep_affinity_binding = %keep_affinity_binding,
                         "亲和性绑定凭据处于冷却，本次将分流"
                     );
-                } else if let Err(wait) = self.rate_limiter.try_acquire(bound_id) {
-                    // 速率限制是短期现象，保留绑定但允许本次分流
+                } else if let Err(wait) = self.rate_limiter.check_rate_limit(bound_id) {
+                    // 只读检查，不消耗速率限制配额
                     keep_affinity_binding = true;
-                    tracing::debug!(
-                        user_id = %user_id,
+                    tracing::info!(
+                        user_id = %mask_user_id(Some(user_id)),
                         credential_id = %bound_id,
                         wait_ms = %wait.as_millis(),
-                        keep_affinity_binding = %keep_affinity_binding,
                         "亲和性绑定凭据触发速率限制，本次将分流"
+                    );
+                } else if let Err(wait) = self.rate_limiter.try_acquire(bound_id) {
+                    // check_rate_limit 通过但 try_acquire 竞争失败（TOCTOU），保留绑定分流
+                    keep_affinity_binding = true;
+                    tracing::debug!(
+                        user_id = %mask_user_id(Some(user_id)),
+                        credential_id = %bound_id,
+                        wait_ms = %wait.as_millis(),
+                        "亲和性凭据 try_acquire 竞争失败，本次将分流"
                     );
                 } else {
                     let credentials = {
@@ -1983,7 +2006,6 @@ impl MultiTokenManager {
     }
 
     /// 标记凭据为余额不足（不会被自动恢复）
-    #[allow(dead_code)]
     pub fn mark_insufficient_balance(&self, id: u64) {
         let mut entries = self.entries.lock();
         if let Some(entry) = entries.iter_mut().find(|e| e.id == id) {

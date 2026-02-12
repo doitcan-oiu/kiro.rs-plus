@@ -42,6 +42,11 @@ fn is_input_too_long_error(err: &Error) -> bool {
         || s.contains("Improperly formed request")
 }
 
+fn is_quota_exhausted_error(err: &Error) -> bool {
+    let s = err.to_string();
+    s.contains("所有凭据已用尽")
+}
+
 fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Response {
     if is_input_too_long_error(&err) {
         tracing::warn!(
@@ -54,6 +59,18 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
             Json(ErrorResponse::new(
                 "invalid_request_error",
                 "Input is too long (CONTENT_LENGTH_EXCEEDS_THRESHOLD). Reduce conversation history/system/tools; retrying the same request will not help.",
+            )),
+        )
+            .into_response();
+    }
+
+    if is_quota_exhausted_error(&err) {
+        tracing::warn!(error = %err, "所有凭据配额已耗尽");
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ErrorResponse::new(
+                "rate_limit_error",
+                "All credentials quota exhausted. Please wait for quota reset or add new credentials.",
             )),
         )
             .into_response();
@@ -292,6 +309,28 @@ pub async fn post_messages(
                 .into_response();
         }
     };
+
+    // 请求体大小预检
+    let max_body = state.compression_config.max_request_body_bytes;
+    if max_body > 0 && request_body.len() > max_body {
+        tracing::warn!(
+            request_body_bytes = request_body.len(),
+            threshold = max_body,
+            "请求体超过安全阈值，拒绝发送"
+        );
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(
+                "invalid_request_error",
+                format!(
+                    "Request too large ({} bytes, limit {}). Reduce conversation history or tool output.",
+                    request_body.len(),
+                    max_body
+                ),
+            )),
+        )
+            .into_response();
+    }
 
     #[cfg(feature = "sensitive-logs")]
     tracing::debug!(
@@ -811,6 +850,28 @@ pub async fn post_messages_cc(
                 .into_response();
         }
     };
+
+    // 请求体大小预检
+    let max_body = state.compression_config.max_request_body_bytes;
+    if max_body > 0 && request_body.len() > max_body {
+        tracing::warn!(
+            request_body_bytes = request_body.len(),
+            threshold = max_body,
+            "请求体超过安全阈值，拒绝发送"
+        );
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::new(
+                "invalid_request_error",
+                format!(
+                    "Request too large ({} bytes, limit {}). Reduce conversation history or tool output.",
+                    request_body.len(),
+                    max_body
+                ),
+            )),
+        )
+            .into_response();
+    }
 
     #[cfg(feature = "sensitive-logs")]
     tracing::debug!(
