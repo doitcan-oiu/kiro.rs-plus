@@ -1,10 +1,25 @@
 # Changelog
 
-## [v1.0.9] - 2026-02-12
+## [v1.0.10] - 2026-02-12
+
+### Fixed
+- **配额耗尽返回 429 而非 502** (`src/anthropic/handlers.rs`, `src/kiro/provider.rs`)
+  - 所有凭据配额耗尽时返回 `429 Too Many Requests`（`rate_limit_error`），而非 `502 Bad Gateway`
+  - 余额刷新时主动禁用低余额凭据（余额 < 1.0），402 分支同步清零余额缓存
+- **亲和性检查不再触发限流** (`src/kiro/token_manager.rs`)
+  - 亲和性检查改用 `check_rate_limit` 只读探测，消除"检查本身消耗速率配额"的恶性循环
+  - 亲和性分流日志提升至 info 级别并脱敏 user_id，便于生产监控热点凭据
+
+### Added
+- **请求体大小预检** (`src/anthropic/handlers.rs`, `src/model/config.rs`)
+  - 新增 `max_request_body_bytes` 配置项（默认 400KB），序列化后拦截超大请求避免无效上游往返
+  - `post_messages` 和 `post_messages_cc` 均支持预检
 
 ### Changed
 - **移除无意义的 max_tokens 调整逻辑** (`src/anthropic/handlers.rs`)
   - 删除 max_tokens 超限警告日志和调整逻辑，因为该值实际不传递给 Kiro 上游
+
+## [v1.0.9] - 2026-02-12
 
 ### Fixed
 - **修复 upstream 合并丢失的功能** (`src/anthropic/stream.rs`)
