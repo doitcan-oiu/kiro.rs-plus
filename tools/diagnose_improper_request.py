@@ -157,6 +157,7 @@ def find_issues(
 
     # Tool result 是否能在 history 的 tool_use 里找到（启发式）
     tool_use_ids: set[str] = set()
+    history_tool_result_ids: set[str] = set()
     tool_def_names_ci: set[str] = set()
 
     for t in tools if isinstance(tools, list) else []:
@@ -169,31 +170,80 @@ def find_issues(
             continue
         am = h.get("assistantResponseMessage")
         if not isinstance(am, dict):
-            continue
-        tus = am.get("toolUses")
-        if not isinstance(tus, list):
-            continue
-        for tu in tus:
-            if not isinstance(tu, dict):
+            # 也可能是 user 消息（含 tool_result）
+            um = h.get("userInputMessage")
+            if not isinstance(um, dict):
                 continue
-            tid = tu.get("toolUseId")
-            if isinstance(tid, str):
-                tool_use_ids.add(tid)
-            # 历史 tool_use 的 name 必须在 tools 中有定义（上游常见约束）
-            nm = tu.get("name")
-            if isinstance(nm, str) and tool_def_names_ci and nm.lower() not in tool_def_names_ci:
-                issues.append("E_HISTORY_TOOL_USE_NAME_NOT_IN_TOOLS")
+            uctx = um.get("userInputMessageContext")
+            if not isinstance(uctx, dict):
+                continue
+            trs = uctx.get("toolResults")
+            if not isinstance(trs, list):
+                continue
+            for tr in trs:
+                if not isinstance(tr, dict):
+                    continue
+                tid = tr.get("toolUseId")
+                if isinstance(tid, str):
+                    history_tool_result_ids.add(tid)
+            continue
 
+        tus = am.get("toolUses")
+        if isinstance(tus, list):
+            for tu in tus:
+                if not isinstance(tu, dict):
+                    continue
+                tid = tu.get("toolUseId")
+                if isinstance(tid, str):
+                    tool_use_ids.add(tid)
+                # 历史 tool_use 的 name 必须在 tools 中有定义（上游常见约束）
+                nm = tu.get("name")
+                if isinstance(nm, str) and tool_def_names_ci and nm.lower() not in tool_def_names_ci:
+                    issues.append("E_HISTORY_TOOL_USE_NAME_NOT_IN_TOOLS")
+
+        # 同一条历史消息可能同时包含 userInputMessage（少见，但兼容）
+        um = h.get("userInputMessage")
+        if isinstance(um, dict):
+            uctx = um.get("userInputMessageContext")
+            if isinstance(uctx, dict):
+                trs = uctx.get("toolResults")
+                if isinstance(trs, list):
+                    for tr in trs:
+                        if not isinstance(tr, dict):
+                            continue
+                        tid = tr.get("toolUseId")
+                        if isinstance(tid, str):
+                            history_tool_result_ids.add(tid)
+
+    # history 内部的 tool_result 必须能在 history 的 tool_use 中找到（否则极易触发 400）
+    if history_tool_result_ids and tool_use_ids:
+        if any(tid not in tool_use_ids for tid in history_tool_result_ids):
+            issues.append("E_HISTORY_TOOL_RESULT_ORPHAN")
+    elif history_tool_result_ids and not tool_use_ids:
+        issues.append("E_HISTORY_TOOL_RESULT_ORPHAN")
+
+    # currentMessage 的 tool_result 必须能在 history 的 tool_use 中找到
     orphan_results = 0
+    current_tool_result_ids: set[str] = set()
     if tool_use_ids and isinstance(tool_results, list):
         for tr in tool_results:
             if not isinstance(tr, dict):
                 continue
             tid = tr.get("toolUseId")
-            if isinstance(tid, str) and tid not in tool_use_ids:
-                orphan_results += 1
+            if isinstance(tid, str):
+                current_tool_result_ids.add(tid)
+                if tid not in tool_use_ids:
+                    orphan_results += 1
     if orphan_results:
         issues.append("W_TOOL_RESULT_ORPHAN")
+
+    # history 的 tool_use 必须在 history/currentMessage 的 tool_result 中出现（否则极易触发 400）
+    all_tool_result_ids = history_tool_result_ids | current_tool_result_ids
+    if tool_use_ids and all_tool_result_ids:
+        if any(tid not in all_tool_result_ids for tid in tool_use_ids):
+            issues.append("E_HISTORY_TOOL_USE_ORPHAN")
+    elif tool_use_ids and not all_tool_result_ids:
+        issues.append("E_HISTORY_TOOL_USE_ORPHAN")
 
     # history 过长（强启发式；日志里经常与 400 同现）
     if isinstance(history, list) and len(history) > max_history_messages:
@@ -295,4 +345,3 @@ def main(argv: List[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-
