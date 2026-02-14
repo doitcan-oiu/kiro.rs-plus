@@ -1,5 +1,29 @@
 # Changelog
 
+## [v1.0.11] - 2026-02-14
+
+### Added
+- **自适应二次压缩策略** (`src/anthropic/handlers.rs`)
+  - 请求体超过 `max_request_body_bytes` 阈值时，自动迭代压缩：逐步降低 tool_result/tool_use_input 截断阈值，最后按轮移除最老历史消息
+  - 最多迭代 32 轮，避免极端输入导致过长 CPU 消耗
+  - `post_messages` 和 `post_messages_cc` 均支持自适应压缩
+- **压缩后 tool_use/tool_result 配对修复** (`src/anthropic/compressor.rs`)
+  - 新增 `repair_tool_pairing_pass()`：历史截断后自动移除孤立的 tool_use 和 tool_result
+  - 解决截断破坏跨消息 tool_use→tool_result 配对导致上游返回 400 "Improperly formed request" 的问题
+- **stable 版 `floor_char_boundary` 工具函数** (`src/common/utf8.rs`)
+  - 新增 `common::utf8` 模块，提供 stable Rust 下的 `floor_char_boundary()` 实现
+  - 统一替换项目中散落的 `str::floor_char_boundary()` nightly 调用
+
+### Fixed
+- **WebSearch 支持混合工具列表** (`src/anthropic/websearch.rs`)
+  - `has_web_search_tool()` 改为只要 tools 中包含 web_search（按 name 或 type 判断）即走本地处理，不再要求 tools 仅有一个
+  - `extract_search_query()` 改为取最后一条 user 消息，更符合多轮对话场景
+  - 新增非流式（`stream: false`）响应支持，返回完整 JSON 而非 SSE 流
+
+### Changed
+- **迁移 `floor_char_boundary` 调用到 `common::utf8` 模块** (`src/anthropic/compressor.rs`, `src/anthropic/stream.rs`, `src/admin/service.rs`, `src/kiro/token_manager.rs`, `src/kiro/provider.rs`)
+  - 移除各文件中重复的 `floor_char_boundary` 内联实现，统一使用 `crate::common::utf8::floor_char_boundary`
+
 ## [v1.0.10] - 2026-02-12
 
 ### Fixed
