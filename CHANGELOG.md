@@ -1,5 +1,14 @@
 # Changelog
 
+## [v1.0.12] - 2026-02-14
+
+### Fixed
+- **WebSearch 仅纯搜索请求走本地处理** (`src/anthropic/websearch.rs`, `src/anthropic/handlers.rs`)
+  - 新增 `should_handle_websearch_request()` 精确判断：仅当 tool_choice 强制选择 web_search、tools 仅含 web_search 单工具、或用户消息包含 `Perform a web search for the query:` 前缀时，才路由到本地 WebSearch 处理
+  - 混合工具场景（web_search + 其他工具）改为剔除 web_search 后转发上游，避免普通对话被误当成搜索查询
+  - 新增 `strip_web_search_tools()` 从 tools 列表中移除 web_search 工具
+  - 搜索查询提取增加空白归一化处理
+
 ## [v1.0.11] - 2026-02-14
 
 ### Added
