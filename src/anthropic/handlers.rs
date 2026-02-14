@@ -304,7 +304,7 @@ pub async fn post_messages(
     override_thinking_from_model_name(&mut payload);
 
     // 提取 user_id 用于凭据亲和性
-    let user_id = payload.metadata.as_ref().and_then(|m| m.user_id.as_deref());
+    let user_id = payload.metadata.as_ref().and_then(|m| m.user_id.clone());
 
     // 估算压缩前 input tokens（需在 convert_request 之前，因为后者会消费压缩）
     let estimated_input_tokens = token::count_all_tokens(
@@ -319,7 +319,7 @@ pub async fn post_messages(
         max_tokens = %payload.max_tokens,
         stream = %payload.stream,
         message_count = %payload.messages.len(),
-        user_id = %mask_user_id(user_id),
+        user_id = %mask_user_id(user_id.as_deref()),
         estimated_input_tokens,
         "Received POST /v1/messages request"
     );
@@ -339,11 +339,17 @@ pub async fn post_messages(
         }
     };
 
-    // 检查是否为 WebSearch 请求
-    if websearch::has_web_search_tool(&payload) {
-        tracing::info!("检测到 WebSearch 工具，路由到 WebSearch 处理");
+    // 检查是否为纯 WebSearch 请求（仅 web_search 单工具 / tool_choice 强制 / 前缀匹配）
+    if websearch::should_handle_websearch_request(&payload) {
+        tracing::info!("检测到纯 WebSearch 请求，路由到本地 WebSearch 处理");
         return websearch::handle_websearch_request(provider, &payload, estimated_input_tokens)
             .await;
+    }
+
+    // 混合工具场景：剔除 web_search 后转发上游
+    if websearch::has_web_search_tool(&payload) {
+        tracing::info!("检测到混合工具列表中的 web_search，剔除后转发上游");
+        websearch::strip_web_search_tools(&mut payload);
     }
 
     // 转换请求
@@ -486,7 +492,7 @@ pub async fn post_messages(
             &payload.model,
             estimated_input_tokens,
             thinking_enabled,
-            user_id,
+            user_id.as_deref(),
         )
         .await
     } else {
@@ -496,7 +502,7 @@ pub async fn post_messages(
             &request_body,
             &payload.model,
             estimated_input_tokens,
-            user_id,
+            user_id.as_deref(),
         )
         .await
     }
@@ -915,11 +921,17 @@ pub async fn post_messages_cc(
         "Received POST /cc/v1/messages request"
     );
 
-    // 检查是否为 WebSearch 请求
-    if websearch::has_web_search_tool(&payload) {
-        tracing::info!("检测到 WebSearch 工具，路由到 WebSearch 处理");
+    // 检查是否为纯 WebSearch 请求（仅 web_search 单工具 / tool_choice 强制 / 前缀匹配）
+    if websearch::should_handle_websearch_request(&payload) {
+        tracing::info!("检测到纯 WebSearch 请求，路由到本地 WebSearch 处理");
         return websearch::handle_websearch_request(provider, &payload, estimated_input_tokens)
             .await;
+    }
+
+    // 混合工具场景：剔除 web_search 后转发上游
+    if websearch::has_web_search_tool(&payload) {
+        tracing::info!("检测到混合工具列表中的 web_search，剔除后转发上游");
+        websearch::strip_web_search_tools(&mut payload);
     }
 
     // 转换请求

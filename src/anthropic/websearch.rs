@@ -18,6 +18,8 @@ use uuid::Uuid;
 use super::stream::SseEvent;
 use super::types::{ErrorResponse, MessagesRequest};
 
+const WEB_SEARCH_PREFIX: &str = "Perform a web search for the query: ";
+
 /// MCP 请求
 #[derive(Debug, Serialize)]
 pub struct McpRequest {
@@ -112,6 +114,103 @@ pub fn has_web_search_tool(req: &MessagesRequest) -> bool {
         .is_some_and(|tools| tools.iter().any(|t| t.name == "web_search" || t.is_web_search()))
 }
 
+fn tool_choice_requests_web_search(req: &MessagesRequest) -> bool {
+    let Some(choice) = req.tool_choice.as_ref() else {
+        return false;
+    };
+
+    let Some(obj) = choice.as_object() else {
+        return false;
+    };
+
+    // Anthropic 常见形态：{"type":"tool","name":"web_search"}
+    let name = obj
+        .get("name")
+        .and_then(|v| v.as_str())
+        .or_else(|| obj.get("tool_name").and_then(|v| v.as_str()));
+
+    if name != Some("web_search") {
+        return false;
+    }
+
+    // 若包含 type 字段，仅当 type=tool 才视为“强制调用”
+    match obj.get("type").and_then(|v| v.as_str()) {
+        Some("tool") => true,
+        Some(_) => false,
+        None => true,
+    }
+}
+
+fn is_only_web_search_tool(req: &MessagesRequest) -> bool {
+    req.tools.as_ref().is_some_and(|tools| {
+        tools.len() == 1 && tools.first().is_some_and(|t| t.name == "web_search" || t.is_web_search())
+    })
+}
+
+fn extract_last_user_text(req: &MessagesRequest) -> Option<String> {
+    let msg = req
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .or_else(|| req.messages.last())?;
+
+    match &msg.content {
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Array(arr) => {
+            let first_block = arr.first()?;
+            if first_block.get("type")?.as_str()? == "text" {
+                Some(first_block.get("text")?.as_str()?.to_string())
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn request_explicit_web_search_prefix(req: &MessagesRequest) -> bool {
+    extract_last_user_text(req)
+        .map(|t| t.trim_start().starts_with(WEB_SEARCH_PREFIX))
+        .unwrap_or(false)
+}
+
+/// 判断当前请求是否应走“本地 WebSearch”处理。
+///
+/// 注意：`tools` 里包含 `web_search` 仅代表“可用工具”，并不代表这次一定要执行搜索。
+/// 若不加额外条件，容易把普通对话/任务指令误当成搜索查询，导致 MCP 侧返回 -32602。
+pub fn should_handle_websearch_request(req: &MessagesRequest) -> bool {
+    if !has_web_search_tool(req) {
+        return false;
+    }
+
+    // 1) tool_choice 强制选择 web_search
+    if tool_choice_requests_web_search(req) {
+        return true;
+    }
+
+    // 2) 兼容旧客户端：仅提供 web_search 单工具时，视为“纯 WebSearch 请求”
+    if is_only_web_search_tool(req) {
+        return true;
+    }
+
+    // 3) 兼容 Claude Code 风格前缀
+    request_explicit_web_search_prefix(req)
+}
+
+/// 从请求的 tools 列表中移除 web_search 工具。
+///
+/// 当请求包含混合工具（web_search + 其他工具）时，剔除 web_search 后转发上游。
+/// 若剔除后 tools 为空，则设为 None。
+pub fn strip_web_search_tools(req: &mut MessagesRequest) {
+    if let Some(tools) = req.tools.as_mut() {
+        tools.retain(|t| t.name != "web_search" && !t.is_web_search());
+        if tools.is_empty() {
+            req.tools = None;
+        }
+    }
+}
+
 /// 从消息中提取搜索查询
 ///
 /// 读取 messages 中最后一条 user 消息的第一个内容块（更符合多轮对话场景）
@@ -141,12 +240,12 @@ pub fn extract_search_query(req: &MessagesRequest) -> Option<String> {
     };
 
     // 去除前缀 "Perform a web search for the query: "
-    const PREFIX: &str = "Perform a web search for the query: ";
     let query = text
-        .strip_prefix(PREFIX)
+        .strip_prefix(WEB_SEARCH_PREFIX)
         .map(|s| s.to_string())
         .unwrap_or(text);
 
+    let query = query.split_whitespace().collect::<Vec<_>>().join(" ");
     if query.is_empty() { None } else { Some(query) }
 }
 
