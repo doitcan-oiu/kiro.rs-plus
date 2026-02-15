@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [v1.0.16] - 2026-02-15
 
 ### Fixed
 - **请求体日志仅在上游报错时输出完整内容** (`src/anthropic/handlers.rs`)
