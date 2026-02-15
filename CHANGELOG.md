@@ -1,5 +1,14 @@
 # Changelog
 
+## [v1.0.17] - 2026-02-15
+
+### Added
+- **自适应压缩第四层：超长用户消息内容截断** (`src/anthropic/compressor.rs`, `src/anthropic/handlers.rs`)
+  - 新增 `compress_long_messages_pass()` 函数，截断超长的 User 消息 content（保留头部，尾部附加省略标记）
+  - 在 `adaptive_shrink_request_body` 的三层策略之后增加第四层兜底，解决单条消息过大（如粘贴整个文件）导致自适应压缩空转的问题
+  - 动态计算截断阈值：初始为最大消息字符数的 3/4，每轮递减 3/4，最低 8192 字符
+  - 日志新增 `final_message_content_max_chars` 字段便于排查
+
 ## [v1.0.16] - 2026-02-15
 
 ### Fixed

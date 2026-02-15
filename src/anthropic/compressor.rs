@@ -560,6 +560,59 @@ fn repair_tool_pairing_pass(state: &mut ConversationState) -> (usize, usize) {
     (removed_tool_uses, removed_tool_results)
 }
 
+// ============ 超长消息内容截断 ============
+
+/// 截断超长的用户消息内容（history user messages 和 current_message）
+///
+/// 这是最后手段的压缩层，仅在自适应二次压缩中使用。
+/// 截断策略：保留头部内容，尾部截断并附加省略标记。
+///
+/// 返回节省的字节数。
+pub fn compress_long_messages_pass(state: &mut ConversationState, max_chars: usize) -> usize {
+    if max_chars == 0 {
+        return 0;
+    }
+
+    let mut saved = 0usize;
+
+    // 遍历 history 中所有 User 消息
+    for msg in &mut state.history {
+        if let Message::User(user_msg) = msg {
+            saved += truncate_long_content(&mut user_msg.user_input_message.content, max_chars);
+        }
+    }
+
+    // 处理 current_message
+    saved += truncate_long_content(
+        &mut state.current_message.user_input_message.content,
+        max_chars,
+    );
+
+    saved
+}
+
+/// 截断单个 content 字段，返回节省的字节数
+///
+/// 跳过仅为空格占位符 " " 的字段（与 compress_string_field 一致）
+fn truncate_long_content(field: &mut String, max_chars: usize) -> usize {
+    if field == " " {
+        return 0;
+    }
+    let char_count = field.chars().count();
+    if char_count <= max_chars {
+        return 0;
+    }
+
+    let original_len = field.len();
+    let truncated = safe_char_truncate(field, max_chars);
+    let omitted = char_count - max_chars;
+    *field = format!(
+        "{}\n...[content truncated, {} chars omitted]",
+        truncated, omitted
+    );
+    original_len.saturating_sub(field.len())
+}
+
 // ============ 工具函数 ============
 
 /// 安全 UTF-8 字符截断
@@ -944,5 +997,67 @@ mod tests {
         if let Message::Assistant(a) = &state.history[1] {
             assert_eq!(a.assistant_response_message.content, original_content);
         }
+    }
+
+    #[test]
+    fn test_compress_long_messages_truncates_current_message() {
+        let long_content = "a".repeat(20000);
+        let mut state = make_simple_state(vec![], &long_content);
+        let saved = compress_long_messages_pass(&mut state, 8192);
+        assert!(saved > 0);
+        let content = &state.current_message.user_input_message.content;
+        assert!(content.len() < long_content.len());
+        assert!(content.contains("[content truncated,"));
+        assert!(content.contains("chars omitted]"));
+        // 头部应保留
+        assert!(content.starts_with("aaaa"));
+    }
+
+    #[test]
+    fn test_compress_long_messages_truncates_history_user() {
+        let long_content = "b".repeat(20000);
+        let mut state = make_simple_state(vec![(&long_content, "short reply")], "current");
+        let saved = compress_long_messages_pass(&mut state, 8192);
+        assert!(saved > 0);
+        if let Message::User(u) = &state.history[0] {
+            assert!(u.user_input_message.content.len() < long_content.len());
+            assert!(u.user_input_message.content.contains("[content truncated,"));
+        } else {
+            panic!("expected User message");
+        }
+    }
+
+    #[test]
+    fn test_compress_long_messages_short_unchanged() {
+        let mut state = make_simple_state(vec![("short user", "short assistant")], "short current");
+        let saved = compress_long_messages_pass(&mut state, 8192);
+        assert_eq!(saved, 0);
+        assert_eq!(
+            state.current_message.user_input_message.content,
+            "short current"
+        );
+        if let Message::User(u) = &state.history[0] {
+            assert_eq!(u.user_input_message.content, "short user");
+        }
+    }
+
+    #[test]
+    fn test_compress_long_messages_skips_placeholder() {
+        let mut state = make_simple_state(vec![], " ");
+        let saved = compress_long_messages_pass(&mut state, 1);
+        assert_eq!(saved, 0);
+        assert_eq!(state.current_message.user_input_message.content, " ");
+    }
+
+    #[test]
+    fn test_compress_long_messages_zero_max_chars_noop() {
+        let long_content = "x".repeat(20000);
+        let mut state = make_simple_state(vec![], &long_content);
+        let saved = compress_long_messages_pass(&mut state, 0);
+        assert_eq!(saved, 0);
+        assert_eq!(
+            state.current_message.user_input_message.content,
+            long_content
+        );
     }
 }

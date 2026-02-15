@@ -29,6 +29,8 @@ const ADAPTIVE_MIN_TOOL_RESULT_MAX_CHARS: usize = 512;
 const ADAPTIVE_MIN_TOOL_USE_INPUT_MAX_CHARS: usize = 256;
 /// 历史截断默认保留消息数（与 compressor.rs 的 preserve_count 保持一致）
 const ADAPTIVE_HISTORY_PRESERVE_MESSAGES: usize = 2;
+/// 消息内容二次压缩的最低阈值（字符数）
+const ADAPTIVE_MIN_MESSAGE_CONTENT_MAX_CHARS: usize = 8192;
 
 use super::converter::{ConversionError, convert_request};
 use super::middleware::AppState;
@@ -64,6 +66,7 @@ struct AdaptiveCompressionOutcome {
     additional_history_turns_removed: usize,
     final_tool_result_max_chars: usize,
     final_tool_use_input_max_chars: usize,
+    final_message_content_max_chars: usize,
 }
 
 /// 计算 KiroRequest 中所有图片 base64 数据的总字节数。
@@ -112,15 +115,37 @@ fn adaptive_shrink_request_body(
         additional_history_turns_removed: 0,
         final_tool_result_max_chars: base_config.tool_result_max_chars,
         final_tool_use_input_max_chars: base_config.tool_use_input_max_chars,
+        final_message_content_max_chars: 0,
     };
 
     // 二次压缩策略：
     // 1) 逐步降低 tool_result_max_chars
     // 2) 逐步降低 tool_use_input_max_chars
     // 3) 按 request_body_bytes 逐轮移除最老的 user+assistant 两条消息（保留前 2 条）
+    // 4) 截断超长用户消息内容（最后手段）
     //
     // 每轮都会重新跑一次压缩管道（包含 tool 配对修复），再重新序列化计算字节数。
     let mut adaptive_config = base_config.clone();
+
+    // 扫描所有用户消息，找到最大 content 字符数作为初始 message_content_max_chars
+    let max_content_chars = {
+        let mut max_chars = kiro_request
+            .conversation_state
+            .current_message
+            .user_input_message
+            .content
+            .chars()
+            .count();
+        for msg in &kiro_request.conversation_state.history {
+            if let crate::kiro::model::requests::conversation::Message::User(u) = msg {
+                max_chars = max_chars.max(u.user_input_message.content.chars().count());
+            }
+        }
+        max_chars
+    };
+    // 初始值设为最大消息字符数的 3/4
+    let mut message_content_max_chars =
+        (max_content_chars * 3 / 4).max(ADAPTIVE_MIN_MESSAGE_CONTENT_MAX_CHARS);
 
     for _ in 0..ADAPTIVE_COMPRESSION_MAX_ITERS {
         // 每轮重新计算图片字节（历史截断可能移除含图片的消息）
@@ -152,6 +177,20 @@ fn adaptive_shrink_request_body(
                 history.remove(ADAPTIVE_HISTORY_PRESERVE_MESSAGES);
                 outcome.additional_history_turns_removed += 1;
                 changed = true;
+            } else if message_content_max_chars >= ADAPTIVE_MIN_MESSAGE_CONTENT_MAX_CHARS {
+                // 第四层：截断超长消息内容（最后手段）
+                let saved = super::compressor::compress_long_messages_pass(
+                    &mut kiro_request.conversation_state,
+                    message_content_max_chars,
+                );
+                if saved > 0 {
+                    changed = true;
+                }
+                // 记录本轮实际生效的阈值（递减前）
+                outcome.final_message_content_max_chars = message_content_max_chars;
+                // 每轮递减 3/4
+                message_content_max_chars =
+                    (message_content_max_chars * 3 / 4).max(ADAPTIVE_MIN_MESSAGE_CONTENT_MAX_CHARS);
             }
         }
 
@@ -167,6 +206,8 @@ fn adaptive_shrink_request_body(
 
     outcome.final_tool_result_max_chars = adaptive_config.tool_result_max_chars;
     outcome.final_tool_use_input_max_chars = adaptive_config.tool_use_input_max_chars;
+    // final_message_content_max_chars 在循环内截断时已记录实际生效值；
+    // 若第四层从未执行，保持默认 0 表示未触发
 
     Ok(Some(outcome))
 }
@@ -538,6 +579,7 @@ pub async fn post_messages(
                     additional_history_turns_removed = outcome.additional_history_turns_removed,
                     final_tool_result_max_chars = outcome.final_tool_result_max_chars,
                     final_tool_use_input_max_chars = outcome.final_tool_use_input_max_chars,
+                    final_message_content_max_chars = outcome.final_message_content_max_chars,
                     "请求体超过阈值，已执行自适应二次压缩"
                 );
             }
@@ -566,6 +608,11 @@ pub async fn post_messages(
             effective_bytes = final_effective_len,
             threshold = max_body,
             "请求体超过安全阈值，拒绝发送"
+        );
+        #[cfg(feature = "sensitive-logs")]
+        tracing::error!(
+            "自适应压缩仍超限，完整请求体（用于诊断）: {}",
+            truncate_base64_in_request_body(&request_body)
         );
         return (
             StatusCode::BAD_REQUEST,
@@ -1169,6 +1216,7 @@ pub async fn post_messages_cc(
                     additional_history_turns_removed = outcome.additional_history_turns_removed,
                     final_tool_result_max_chars = outcome.final_tool_result_max_chars,
                     final_tool_use_input_max_chars = outcome.final_tool_use_input_max_chars,
+                    final_message_content_max_chars = outcome.final_message_content_max_chars,
                     "请求体超过阈值，已执行自适应二次压缩"
                 );
             }
@@ -1197,6 +1245,11 @@ pub async fn post_messages_cc(
             effective_bytes = final_effective_len,
             threshold = max_body,
             "请求体超过安全阈值，拒绝发送"
+        );
+        #[cfg(feature = "sensitive-logs")]
+        tracing::error!(
+            "自适应压缩仍超限，完整请求体（用于诊断）: {}",
+            truncate_base64_in_request_body(&request_body)
         );
         return (
             StatusCode::BAD_REQUEST,
