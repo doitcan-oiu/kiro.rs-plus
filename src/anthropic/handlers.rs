@@ -252,6 +252,9 @@ pub async fn get_models() -> impl IntoResponse {
             display_name: "Claude Sonnet 4.5".to_string(),
             model_type: "chat".to_string(),
             max_tokens: 32000,
+            context_length: Some(200_000),
+            max_completion_tokens: Some(64_000),
+            thinking: Some(true),
         },
         Model {
             id: "claude-sonnet-4-5-20250929-thinking".to_string(),
@@ -261,6 +264,21 @@ pub async fn get_models() -> impl IntoResponse {
             display_name: "Claude Sonnet 4.5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
             max_tokens: 32000,
+            context_length: Some(200_000),
+            max_completion_tokens: Some(64_000),
+            thinking: Some(true),
+        },
+        Model {
+            id: "claude-sonnet-4-5-20250929-agentic".to_string(),
+            object: "model".to_string(),
+            created: 1727568000,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Sonnet 4.5 (Agentic)".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 32000,
+            context_length: Some(200_000),
+            max_completion_tokens: Some(64_000),
+            thinking: Some(true),
         },
         Model {
             id: "claude-opus-4-5-20251101".to_string(),
@@ -270,6 +288,9 @@ pub async fn get_models() -> impl IntoResponse {
             display_name: "Claude Opus 4.5".to_string(),
             model_type: "chat".to_string(),
             max_tokens: 32000,
+            context_length: Some(200_000),
+            max_completion_tokens: Some(64_000),
+            thinking: Some(true),
         },
         Model {
             id: "claude-opus-4-5-20251101-thinking".to_string(),
@@ -279,6 +300,21 @@ pub async fn get_models() -> impl IntoResponse {
             display_name: "Claude Opus 4.5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
             max_tokens: 32000,
+            context_length: Some(200_000),
+            max_completion_tokens: Some(64_000),
+            thinking: Some(true),
+        },
+        Model {
+            id: "claude-opus-4-5-20251101-agentic".to_string(),
+            object: "model".to_string(),
+            created: 1730419200,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Opus 4.5 (Agentic)".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 32000,
+            context_length: Some(200_000),
+            max_completion_tokens: Some(64_000),
+            thinking: Some(true),
         },
         Model {
             id: "claude-opus-4-6".to_string(),
@@ -288,6 +324,9 @@ pub async fn get_models() -> impl IntoResponse {
             display_name: "Claude Opus 4.6".to_string(),
             model_type: "chat".to_string(),
             max_tokens: 32000,
+            context_length: Some(1_000_000),
+            max_completion_tokens: Some(128_000),
+            thinking: Some(true),
         },
         Model {
             id: "claude-opus-4-6-thinking".to_string(),
@@ -297,6 +336,21 @@ pub async fn get_models() -> impl IntoResponse {
             display_name: "Claude Opus 4.6 (Thinking)".to_string(),
             model_type: "chat".to_string(),
             max_tokens: 32000,
+            context_length: Some(1_000_000),
+            max_completion_tokens: Some(128_000),
+            thinking: Some(true),
+        },
+        Model {
+            id: "claude-opus-4-6-agentic".to_string(),
+            object: "model".to_string(),
+            created: 1770314400,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Opus 4.6 (Agentic)".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 32000,
+            context_length: Some(1_000_000),
+            max_completion_tokens: Some(128_000),
+            thinking: Some(true),
         },
         Model {
             id: "claude-haiku-4-5-20251001".to_string(),
@@ -306,6 +360,9 @@ pub async fn get_models() -> impl IntoResponse {
             display_name: "Claude Haiku 4.5".to_string(),
             model_type: "chat".to_string(),
             max_tokens: 32000,
+            context_length: Some(200_000),
+            max_completion_tokens: Some(64_000),
+            thinking: Some(true),
         },
         Model {
             id: "claude-haiku-4-5-20251001-thinking".to_string(),
@@ -315,6 +372,21 @@ pub async fn get_models() -> impl IntoResponse {
             display_name: "Claude Haiku 4.5 (Thinking)".to_string(),
             model_type: "chat".to_string(),
             max_tokens: 32000,
+            context_length: Some(200_000),
+            max_completion_tokens: Some(64_000),
+            thinking: Some(true),
+        },
+        Model {
+            id: "claude-haiku-4-5-20251001-agentic".to_string(),
+            object: "model".to_string(),
+            created: 1727740800,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Haiku 4.5 (Agentic)".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 32000,
+            context_length: Some(200_000),
+            max_completion_tokens: Some(64_000),
+            thinking: Some(true),
         },
     ];
 
@@ -509,7 +581,7 @@ pub async fn post_messages(
     #[cfg(feature = "sensitive-logs")]
     tracing::debug!(
         "Kiro request body: {}",
-        truncate_middle(&request_body, 1200)
+        truncate_base64_in_request_body(&request_body)
     );
     #[cfg(not(feature = "sensitive-logs"))]
     tracing::debug!(
@@ -682,9 +754,6 @@ fn create_sse_stream(
     initial_stream.chain(processing_stream)
 }
 
-/// 上下文窗口大小（200k tokens）
-const CONTEXT_WINDOW_SIZE: i32 = 200_000;
-
 /// 处理非流式请求
 async fn handle_non_stream_request(
     provider: std::sync::Arc<crate::kiro::provider::KiroProvider>,
@@ -757,6 +826,25 @@ async fn handle_non_stream_request(
                                     serde_json::json!({})
                                 } else {
                                     serde_json::from_str(buffer).unwrap_or_else(|e| {
+                                        // 检测是否为截断导致的解析失败
+                                        if let Some(truncation_info) =
+                                            super::truncation::detect_truncation(
+                                                &tool_use.name,
+                                                &tool_use.tool_use_id,
+                                                buffer,
+                                            )
+                                        {
+                                            let soft_msg =
+                                                super::truncation::build_soft_failure_result(
+                                                    &truncation_info,
+                                                );
+                                            tracing::warn!(
+                                                tool_use_id = %tool_use.tool_use_id,
+                                                truncation_type = %truncation_info.truncation_type,
+                                                "检测到工具调用截断: {}", soft_msg
+                                            );
+                                        }
+
                                         // 仅在显式开启敏感日志时输出完整内容
                                         #[cfg(feature = "sensitive-logs")]
                                         tracing::warn!(
@@ -776,6 +864,9 @@ async fn handle_non_stream_request(
                                     })
                                 };
 
+                                // 释放已完成的 buffer，避免请求处理期间内存重复占用
+                                tool_json_buffers.remove(&tool_use.tool_use_id);
+
                                 tool_uses.push(json!({
                                     "type": "tool_use",
                                     "id": tool_use.tool_use_id,
@@ -786,20 +877,21 @@ async fn handle_non_stream_request(
                         }
                         Event::ContextUsage(context_usage) => {
                             // 从上下文使用百分比计算实际的 input_tokens
-                            // 公式: percentage * 200000 / 100 = percentage * 2000
-                            let actual_input_tokens = (context_usage.context_usage_percentage
-                                * (CONTEXT_WINDOW_SIZE as f64)
-                                / 100.0)
-                                as i32;
+                            let context_window =
+                                super::types::get_context_window_size(model) as f64;
+                            let actual_input_tokens =
+                                (context_usage.context_usage_percentage * context_window / 100.0)
+                                    as i32;
                             context_input_tokens = Some(actual_input_tokens);
                             // 上下文使用量达到 100% 时，设置 stop_reason 为 model_context_window_exceeded
                             if context_usage.context_usage_percentage >= 100.0 {
                                 stop_reason = "model_context_window_exceeded".to_string();
                             }
                             tracing::debug!(
-                                "收到 contextUsageEvent: {}%, 计算 input_tokens: {}",
+                                "收到 contextUsageEvent: {}%, 计算 input_tokens: {} (context_window: {})",
                                 context_usage.context_usage_percentage,
-                                actual_input_tokens
+                                actual_input_tokens,
+                                context_window as i32
                             );
                         }
                         Event::Exception { exception_type, .. } => {
@@ -860,14 +952,39 @@ async fn handle_non_stream_request(
 
 /// 检测模型名是否包含 "thinking" 后缀，若包含则覆写 thinking 配置
 ///
+/// 支持的后缀格式：
+/// - `-thinking-minimal` → budget 512
+/// - `-thinking-low` → budget 1024
+/// - `-thinking-medium` → budget 8192
+/// - `-thinking-high` → budget 24576
+/// - `-thinking-xhigh` → budget 32768
+/// - `-thinking` → budget 20000（默认）
+///
 /// - Opus 4.6：覆写为 adaptive 类型
 /// - 其他模型：覆写为 enabled 类型
-/// - budget_tokens 固定为 20000
 fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
     let model_lower = payload.model.to_lowercase();
     if !model_lower.contains("thinking") {
         return;
     }
+
+    // 具体后缀必须在通用 "thinking" 之前匹配
+    let budget_tokens = if model_lower.ends_with("-thinking-minimal") {
+        512
+    } else if model_lower.ends_with("-thinking-low") {
+        1024
+    } else if model_lower.ends_with("-thinking-medium") {
+        8192
+    } else if model_lower.ends_with("-thinking-high") {
+        24576
+    } else if model_lower.ends_with("-thinking-xhigh") {
+        32768
+    } else if model_lower.ends_with("-thinking") {
+        20000
+    } else {
+        // "thinking" 出现在模型名中但不是后缀（如 "thinking-model-v2"），不覆写
+        return;
+    };
 
     let is_opus_4_6 = model_lower.contains("opus")
         && (model_lower.contains("4-6") || model_lower.contains("4.6"));
@@ -877,12 +994,13 @@ fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
     tracing::info!(
         model = %payload.model,
         thinking_type = thinking_type,
+        budget_tokens = budget_tokens,
         "模型名包含 thinking 后缀，覆写 thinking 配置"
     );
 
     payload.thinking = Some(Thinking {
         thinking_type: thinking_type.to_string(),
-        budget_tokens: 20000,
+        budget_tokens,
     });
 
     if is_opus_4_6 {
@@ -1100,7 +1218,7 @@ pub async fn post_messages_cc(
     #[cfg(feature = "sensitive-logs")]
     tracing::debug!(
         "Kiro request body: {}",
-        truncate_middle(&request_body, 1200)
+        truncate_base64_in_request_body(&request_body)
     );
     #[cfg(not(feature = "sensitive-logs"))]
     tracing::debug!(
@@ -1302,4 +1420,72 @@ fn truncate_middle(s: &str, keep: usize) -> std::borrow::Cow<'_, str> {
         omitted,
         &s[tail_start..]
     ))
+}
+
+/// sensitive-logs 模式下输出完整请求体，但截断 base64 图片数据
+///
+/// 图片 base64 数据对诊断 400 错误没有价值，但可能占几十 KB。
+/// 扫描 `"bytes":"<base64...>"` 模式，将长 base64 替换为占位符。
+#[cfg(feature = "sensitive-logs")]
+fn truncate_base64_in_request_body(s: &str) -> std::borrow::Cow<'_, str> {
+    const MARKER: &str = r#""bytes":""#;
+    const MIN_BASE64_LEN: usize = 200;
+
+    // 快速路径：没有 "bytes":" 就直接返回
+    if !s.contains(MARKER) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+
+    let mut result = String::with_capacity(s.len());
+    let mut pos = 0;
+    let bytes = s.as_bytes();
+
+    while pos < bytes.len() {
+        if let Some(offset) = s[pos..].find(MARKER) {
+            let marker_start = pos + offset;
+            let value_start = marker_start + MARKER.len();
+
+            // 找到闭合引号（处理转义）
+            let mut end = value_start;
+            let mut escaped = false;
+            while end < bytes.len() {
+                if escaped {
+                    escaped = false;
+                    end += 1;
+                    continue;
+                }
+                match bytes[end] {
+                    b'\\' => {
+                        escaped = true;
+                        end += 1;
+                    }
+                    b'"' => break,
+                    _ => end += 1,
+                }
+            }
+
+            let value_len = end - value_start;
+            if value_len >= MIN_BASE64_LEN && is_likely_base64(&s[value_start..end]) {
+                result.push_str(&s[pos..value_start]);
+                result.push_str(&format!("<BASE64_TRUNCATED:{}>", value_len));
+                pos = end; // 跳到闭合引号，下一轮会输出它
+            } else {
+                // 不是 base64 或太短，原样保留
+                result.push_str(&s[pos..value_start]);
+                pos = value_start;
+            }
+        } else {
+            result.push_str(&s[pos..]);
+            break;
+        }
+    }
+
+    std::borrow::Cow::Owned(result)
+}
+
+#[cfg(feature = "sensitive-logs")]
+fn is_likely_base64(s: &str) -> bool {
+    s.bytes()
+        .take(100)
+        .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=')
 }

@@ -49,6 +49,12 @@ pub struct Model {
     #[serde(rename = "type")]
     pub model_type: String,
     pub max_tokens: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_length: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_completion_tokens: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<bool>,
 }
 
 /// 模型列表响应
@@ -61,7 +67,7 @@ pub struct ModelsResponse {
 // === Messages 端点类型 ===
 
 /// 最大思考预算 tokens
-const MAX_BUDGET_TOKENS: i32 = 24576;
+const MAX_BUDGET_TOKENS: i32 = 128_000;
 
 /// Thinking 配置
 #[derive(Debug, Deserialize, Clone)]
@@ -291,4 +297,18 @@ pub struct CountTokensRequest {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CountTokensResponse {
     pub input_tokens: i32,
+}
+
+/// 根据模型名称获取上下文窗口大小
+///
+/// - Opus 4.6 系列: 1,000,000 tokens
+/// - 其他模型: 200,000 tokens
+pub fn get_context_window_size(model: &str) -> i32 {
+    let model_lower = model.to_lowercase();
+    if model_lower.contains("opus") && (model_lower.contains("4-6") || model_lower.contains("4.6"))
+    {
+        1_000_000
+    } else {
+        200_000
+    }
 }

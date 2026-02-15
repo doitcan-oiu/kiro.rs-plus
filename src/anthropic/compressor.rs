@@ -867,18 +867,15 @@ mod tests {
         // 当按 user+assistant 成对从前往后截断时，容易删掉 tool_use 而保留 tool_result。
         let tool_use_id = "tooluse_1";
 
-        let system_user = Message::User(HistoryUserMessage::new(
-            "system",
-            "claude-sonnet-4.5",
-        ));
+        let system_user = Message::User(HistoryUserMessage::new("system", "claude-sonnet-4.5"));
         let system_assistant = Message::Assistant(HistoryAssistantMessage::new(
             "I will follow these instructions.",
         ));
 
         let user1 = Message::User(HistoryUserMessage::new("do something", "claude-sonnet-4.5"));
 
-        let tool_use = ToolUseEntry::new(tool_use_id, "Read")
-            .with_input(serde_json::json!({"path": "a.txt"}));
+        let tool_use =
+            ToolUseEntry::new(tool_use_id, "Read").with_input(serde_json::json!({"path": "a.txt"}));
         let assistant1 = Message::Assistant(HistoryAssistantMessage {
             assistant_response_message: AssistantMessage::new(" ").with_tool_uses(vec![tool_use]),
         });

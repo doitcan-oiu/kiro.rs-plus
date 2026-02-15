@@ -458,9 +458,6 @@ impl SseStateManager {
     }
 }
 
-/// 上下文窗口大小（200k tokens）
-const CONTEXT_WINDOW_SIZE: i32 = 200_000;
-
 /// 流处理上下文
 pub struct StreamContext {
     /// SSE 状态管理器
@@ -585,10 +582,9 @@ impl StreamContext {
             Event::ToolUse(tool_use) => self.process_tool_use(tool_use),
             Event::ContextUsage(context_usage) => {
                 // 从上下文使用百分比计算实际的 input_tokens
-                // 公式: percentage * 200000 / 100 = percentage * 2000
-                let actual_input_tokens = (context_usage.context_usage_percentage
-                    * (CONTEXT_WINDOW_SIZE as f64)
-                    / 100.0) as i32;
+                let context_window = super::types::get_context_window_size(&self.model) as f64;
+                let actual_input_tokens =
+                    (context_usage.context_usage_percentage * context_window / 100.0) as i32;
                 self.context_input_tokens = Some(actual_input_tokens);
                 // 上下文使用量达到 100% 时，设置 stop_reason 为 model_context_window_exceeded
                 if context_usage.context_usage_percentage >= 100.0 {
@@ -596,9 +592,10 @@ impl StreamContext {
                         .set_stop_reason("model_context_window_exceeded");
                 }
                 tracing::debug!(
-                    "收到 contextUsageEvent: {:.4}%, 计算 input_tokens: {}",
+                    "收到 contextUsageEvent: {:.4}%, 计算 input_tokens: {} (context_window: {})",
                     context_usage.context_usage_percentage,
-                    actual_input_tokens
+                    actual_input_tokens,
+                    context_window as i32
                 );
                 Vec::new()
             }

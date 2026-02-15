@@ -30,11 +30,25 @@ Never suggest bypassing these limits via alternative tools. \
 Never ask the user whether to switch approaches. \
 Complete all chunked operations without commentary.";
 
+/// Agentic 模型专用系统提示
+///
+/// 指导模型在 agentic 模式下的行为：持续工作、自主决策、减少确认
+const KIRO_AGENTIC_SYSTEM_PROMPT: &str = "\
+You are an autonomous coding agent. Follow these principles:\n\
+1. Work continuously until the task is fully complete.\n\
+2. Use tools proactively without asking for permission.\n\
+3. When encountering errors, debug and fix them autonomously.\n\
+4. Break complex tasks into steps and execute them sequentially.\n\
+5. Verify your work by reading files after writing them.\n\
+6. Never ask the user for confirmation mid-task — just proceed.\n\
+7. If a tool call fails, try alternative approaches before giving up.\n\
+8. Prefer making changes directly over explaining what you would do.";
+
 fn non_empty_content_or_space(content: String, has_non_text_payload: bool) -> String {
     // Kiro 上游在部分场景下会拒绝空 content（例如仅 tool_result / 仅 image 的消息）。
     // 使用最小占位符可保持语义，同时规避 400 Improperly formed request。
     if has_non_text_payload && content.trim().is_empty() {
-        return " ".to_string();
+        return ".".to_string();
     }
     content
 }
@@ -122,8 +136,11 @@ fn normalize_json_schema(schema: serde_json::Value) -> serde_json::Value {
 /// - 所有 sonnet → claude-sonnet-4.5
 /// - opus 且显式包含 4.5/4-5 → claude-opus-4.5，否则 → claude-opus-4.6（默认最新版）
 /// - 所有 haiku → claude-haiku-4.5
+/// - `-agentic` 后缀会被剥离后再映射
 pub fn map_model(model: &str) -> Option<String> {
     let model_lower = model.to_lowercase();
+    // 剥离 -agentic 后缀再做模型映射
+    let model_lower = model_lower.strip_suffix("-agentic").unwrap_or(&model_lower);
 
     if model_lower.contains("sonnet") {
         Some("claude-sonnet-4.5".to_string())
@@ -138,6 +155,11 @@ pub fn map_model(model: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+/// 判断模型名是否为 agentic 变体
+pub fn is_agentic_model(model: &str) -> bool {
+    model.to_lowercase().ends_with("-agentic")
 }
 
 /// 转换结果
@@ -296,6 +318,7 @@ pub fn convert_request(
         &model_id,
         compression_config,
         total_image_count,
+        is_agentic_model(&req.model),
     )?;
 
     // 8. 验证并过滤 tool_use/tool_result 配对
@@ -323,6 +346,9 @@ pub fn convert_request(
             existing_tool_names.insert(lower);
         }
     }
+
+    // 10.5. 工具压缩：在所有工具（含 placeholder）就绪后执行
+    tools = super::tool_compression::compress_tools_if_needed(&tools);
 
     // 11. 构建 UserInputMessageContext
     let mut context = UserInputMessageContext::new();
@@ -736,6 +762,7 @@ fn build_history(
     model_id: &str,
     compression_config: &CompressionConfig,
     total_image_count: usize,
+    is_agentic: bool,
 ) -> Result<Vec<Message>, ConversionError> {
     let mut history = Vec::new();
 
@@ -794,6 +821,16 @@ fn build_history(
         history.push(Message::User(user_msg));
 
         let assistant_msg = HistoryAssistantMessage::new("I will follow these instructions.");
+        history.push(Message::Assistant(assistant_msg));
+    }
+
+    // Agentic 模型：追加专用系统提示
+    if is_agentic {
+        let user_msg = HistoryUserMessage::new(KIRO_AGENTIC_SYSTEM_PROMPT, model_id);
+        history.push(Message::User(user_msg));
+
+        let assistant_msg =
+            HistoryAssistantMessage::new("I will work autonomously following these principles.");
         history.push(Message::Assistant(assistant_msg));
     }
 
@@ -951,7 +988,7 @@ fn convert_assistant_message(
             format!("<thinking>{}</thinking>", thinking_content)
         }
     } else if text_content.is_empty() && !tool_uses.is_empty() {
-        " ".to_string()
+        ".".to_string()
     } else {
         text_content
     };
@@ -991,7 +1028,7 @@ fn merge_assistant_messages(
     }
 
     let content = if content_parts.is_empty() && !all_tool_uses.is_empty() {
-        " ".to_string()
+        ".".to_string()
     } else {
         content_parts.join("\n\n")
     };
@@ -1512,8 +1549,8 @@ mod tests {
             "content 不应为空"
         );
         assert_eq!(
-            result.assistant_response_message.content, " ",
-            "仅 tool_use 时应使用 ' ' 占位符"
+            result.assistant_response_message.content, ".",
+            "仅 tool_use 时应使用 '.' 占位符"
         );
 
         // 验证 tool_uses 被正确保留
@@ -1725,7 +1762,7 @@ mod tests {
             !content.is_empty(),
             "仅 tool_result 的 user 消息应使用占位符避免空 content"
         );
-        assert_eq!(content, " ");
+        assert_eq!(content, ".");
     }
 
     #[test]
@@ -1787,7 +1824,7 @@ mod tests {
                 !user_msg.user_input_message.content.is_empty(),
                 "history 中的 tool_result user 消息也需要占位符"
             );
-            assert_eq!(user_msg.user_input_message.content, " ");
+            assert_eq!(user_msg.user_input_message.content, ".");
         }
         assert!(found, "测试数据应在 history 中包含 tool_results");
     }
@@ -2371,7 +2408,7 @@ mod tests {
 
         // content 应为占位符（因为所有 text 都是空白）
         assert_eq!(
-            result.assistant_response_message.content, " ",
+            result.assistant_response_message.content, ".",
             "仅 tool_use 时应使用占位符"
         );
     }

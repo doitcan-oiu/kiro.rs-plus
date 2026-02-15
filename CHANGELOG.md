@@ -1,5 +1,28 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Opus 4.6 1M 上下文窗口支持** (`src/anthropic/types.rs`, `src/anthropic/handlers.rs`, `src/anthropic/stream.rs`)
+  - 新增 `get_context_window_size()` 函数，Opus 4.6 返回 1,000,000 tokens，其他模型返回 200,000 tokens
+  - 删除硬编码 `CONTEXT_WINDOW_SIZE` 常量，改用动态计算
+  - `MAX_BUDGET_TOKENS` 从 24,576 提升到 128,000
+  - `Model` 结构体新增 `context_length`、`max_completion_tokens`、`thinking` 字段
+- **Agentic 模型变体** (`src/anthropic/converter.rs`, `src/anthropic/handlers.rs`)
+  - 新增 sonnet-agentic、opus-4.5-agentic、opus-4.6-agentic、haiku-agentic 四个模型变体
+  - `map_model()` 自动剥离 `-agentic` 后缀再映射
+  - Agentic 模型注入专用系统提示，引导自主工作模式
+- **Thinking level 后缀** (`src/anthropic/handlers.rs`)
+  - 支持 `-thinking-minimal`(512)、`-thinking-low`(1024)、`-thinking-medium`(8192)、`-thinking-high`(24576)、`-thinking-xhigh`(32768) 后缀
+- **工具压缩** (`src/anthropic/tool_compression.rs` 新建)
+  - 20KB 阈值两步压缩：简化 input_schema → 按比例截断 description（最短 50 字符）
+- **截断检测** (`src/anthropic/truncation.rs` 新建)
+  - 4 种截断类型的启发式检测（空输入、无效 JSON、缺少字段、未闭合字符串）
+  - 工具 JSON 解析失败时自动检测截断并生成软失败消息
+
+### Changed
+- 工具调用仅含 tool_use 时占位符从 `" "` 改为 `"."`，提升语义清晰度
+
 ## [v1.0.14] - 2026-02-15
 
 ### Fixed

@@ -109,9 +109,11 @@ pub struct WebSearchResult {
 ///
 /// 只要 tools 中出现 web_search（按 name 或 type 判断），就认为应走本地 WebSearch 处理。
 pub fn has_web_search_tool(req: &MessagesRequest) -> bool {
-    req.tools
-        .as_ref()
-        .is_some_and(|tools| tools.iter().any(|t| t.name == "web_search" || t.is_web_search()))
+    req.tools.as_ref().is_some_and(|tools| {
+        tools
+            .iter()
+            .any(|t| t.name == "web_search" || t.is_web_search())
+    })
 }
 
 fn tool_choice_requests_web_search(req: &MessagesRequest) -> bool {
@@ -143,7 +145,10 @@ fn tool_choice_requests_web_search(req: &MessagesRequest) -> bool {
 
 fn is_only_web_search_tool(req: &MessagesRequest) -> bool {
     req.tools.as_ref().is_some_and(|tools| {
-        tools.len() == 1 && tools.first().is_some_and(|t| t.name == "web_search" || t.is_web_search())
+        tools.len() == 1
+            && tools
+                .first()
+                .is_some_and(|t| t.name == "web_search" || t.is_web_search())
     })
 }
 
