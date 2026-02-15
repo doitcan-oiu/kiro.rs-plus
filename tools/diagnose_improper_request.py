@@ -40,22 +40,81 @@ def strip_ansi(s: str) -> str:
 
 
 def iter_request_bodies(log_text: str) -> Iterable[Tuple[int, Dict[str, Any]]]:
+    """从日志中提取 request_body JSON。
+
+    支持两种日志格式：
+    1. sensitive-logs 模式：request_body={"conversationState":...}（可能被截断）
+    2. 普通模式：kiro_request_body_bytes=135777（无 JSON 内容）
+
+    对于截断的 JSON，尝试用 raw_decode 解析到第一个完整 JSON 对象。
+    同时排除 response_body 的误匹配。
+    """
+    decoder = json.JSONDecoder()
+    # 两种来源：
+    # 1. handler DEBUG: "Kiro request body: {json}"（发送前，完整内容）
+    # 2. provider ERROR: "request_body={json}"（400 后，可能被截断）
+    kiro_body_marker = "Kiro request body: "
+    body_re = re.compile(r"(?<![a-z_])request_body=")
+
     for line_no, line in enumerate(log_text.splitlines(), 1):
-        if "request_body" not in line:
-            continue
         clean = strip_ansi(line)
-        idx = clean.find("request_body")
-        brace = clean.find("{", idx)
-        if brace == -1:
+
+        # 来源 1: handler 的 DEBUG 日志（优先，内容更完整）
+        kiro_idx = clean.find(kiro_body_marker)
+        if kiro_idx != -1:
+            brace = clean.find("{", kiro_idx + len(kiro_body_marker))
+            if brace == -1:
+                continue
+        elif "request_body=" in clean:
+            # 来源 2: provider 的 ERROR 日志
+            match = body_re.search(clean)
+            if not match:
+                continue
+            brace = clean.find("{", match.end())
+            if brace == -1:
+                continue
+        else:
             continue
-        body_str = clean[brace:].strip()
+
+        # 使用 raw_decode 解析第一个完整 JSON 对象（忽略行尾其他 tracing 字段）
         try:
-            body = json.loads(body_str)
-        except Exception:
-            # 日志可能被截断/破坏；跳过即可
+            body, _ = decoder.raw_decode(clean, brace)
+        except json.JSONDecodeError:
+            # JSON 被截断（sensitive-logs 的 truncate_middle），尝试提取可用信息
+            body_str = clean[brace:]
+            yield line_no, _partial_parse_request_body(body_str, line_no)
             continue
+
         if isinstance(body, dict):
             yield line_no, body
+
+
+def _partial_parse_request_body(truncated_json: str, line_no: int) -> Dict[str, Any]:
+    """从截断的 JSON 中尽量提取结构信息。
+
+    即使 JSON 不完整，也能通过正则提取 conversationId、工具数量等关键字段，
+    用于启发式诊断。
+    """
+    info: Dict[str, Any] = {"_partial": True, "_raw_len": len(truncated_json)}
+
+    # 提取 conversationId
+    m = re.search(r'"conversationId"\s*:\s*"([^"]+)"', truncated_json)
+    if m:
+        info["_conversationId"] = m.group(1)
+
+    # 统计 toolUseId 出现次数（近似 tool_use 数量）
+    info["_toolUseId_count"] = len(re.findall(r'"toolUseId"', truncated_json))
+
+    # 统计 toolSpecification 出现次数（近似 tool 定义数量）
+    info["_toolSpec_count"] = len(re.findall(r'"toolSpecification"', truncated_json))
+
+    # 统计 assistantResponseMessage 出现次数（近似 history 轮数）
+    info["_assistant_msg_count"] = len(re.findall(r'"assistantResponseMessage"', truncated_json))
+
+    # 统计 userInputMessage 出现次数
+    info["_user_msg_count"] = len(re.findall(r'"userInputMessage"', truncated_json))
+
+    return info
 
 
 def _get(d: Dict[str, Any], path: str, default: Any = None) -> Any:
@@ -68,6 +127,18 @@ def _get(d: Dict[str, Any], path: str, default: Any = None) -> Any:
 
 
 def summarize(body: Dict[str, Any], line_no: int) -> RequestSummary:
+    # 处理 partial 解析的情况
+    if body.get("_partial"):
+        return RequestSummary(
+            line_no=line_no,
+            conversation_id=body.get("_conversationId"),
+            content_len=-1,
+            tools_n=body.get("_toolSpec_count", -1),
+            tool_results_n=body.get("_toolUseId_count", -1),
+            history_n=body.get("_assistant_msg_count", -1),
+            json_len=body.get("_raw_len", 0),
+        )
+
     conversation_id = _get(body, "conversationState.conversationId")
     content = _get(body, "conversationState.currentMessage.userInputMessage.content", "")
     tools = _get(body, "conversationState.currentMessage.userInputMessage.userInputMessageContext.tools", [])
@@ -98,7 +169,15 @@ def find_issues(
     large_payload_bytes: int,
     huge_payload_bytes: int,
 ) -> List[str]:
-    issues: List[str] = []
+    # partial 解析的请求只能做有限诊断
+    if body.get("_partial"):
+        issues: List[str] = ["W_TRUNCATED_LOG"]
+        raw_len = body.get("_raw_len", 0)
+        if raw_len > large_payload_bytes:
+            issues.append("W_PAYLOAD_LARGE")
+        return issues
+
+    issues = []
 
     cs = body.get("conversationState") or {}
     cm = _get(body, "conversationState.currentMessage.userInputMessage", {})
@@ -260,7 +339,9 @@ def find_issues(
 
 
 def main(argv: List[str]) -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description="离线诊断 Improperly formed request（上游 400）常见成因"
+    )
     parser.add_argument("log", nargs="?", default="logs/docker.log", help="docker.log 路径")
     parser.add_argument("--max-samples", type=int, default=5, help="每类问题输出样本数量")
     parser.add_argument("--dump-dir", default=None, help="可选：把 request_body JSON 按行号落盘")
@@ -280,12 +361,51 @@ def main(argv: List[str]) -> int:
     if dump_dir:
         os.makedirs(dump_dir, exist_ok=True)
 
+    # 先扫描所有 400 Improperly formed request 的 ERROR 行，提取上下文
+    print("=" * 60)
+    print("Phase 1: 扫描 400 Improperly formed request 错误")
+    print("=" * 60)
+    error_lines = _scan_400_errors(log_text)
+    if error_lines:
+        for el in error_lines:
+            print(f"\n  [line {el['line_no']}] bytes={el.get('body_bytes', '?')} "
+                  f"url={el.get('url', '?')}")
+            if "_req_body_line" in el:
+                print(f"    ↳ 关联请求体: line {el['_req_body_line']}"
+                      f"{' (truncated)' if el.get('_req_body_partial') else ''}")
+            if "summary" in el:
+                s = el["summary"]
+                print(f"    ↳ conversationId={s.conversation_id or 'None'} "
+                      f"content_len={s.content_len} tools={s.tools_n} "
+                      f"toolResults={s.tool_results_n} history={s.history_n} "
+                      f"json_len={s.json_len}")
+            if "issues" in el and el["issues"]:
+                print(f"    ↳ issues: {', '.join(el['issues'])}")
+            elif "_req_body" in el and el["_req_body"].get("_partial"):
+                body = el["_req_body"]
+                print(f"    ↳ partial: toolSpecs={body.get('_toolSpec_count', '?')} "
+                      f"toolUseIds={body.get('_toolUseId_count', '?')} "
+                      f"assistantMsgs={body.get('_assistant_msg_count', '?')} "
+                      f"userMsgs={body.get('_user_msg_count', '?')} "
+                      f"raw_len={body.get('_raw_len', '?')}")
+    else:
+        print("  未发现 400 Improperly formed request 错误")
+    print()
+
+    # 再扫描 request_body 条目
+    print("=" * 60)
+    print("Phase 2: 解析 request_body 条目")
+    print("=" * 60)
+
     issue_counter: Counter[str] = Counter()
     issues_to_samples: Dict[str, List[RequestSummary]] = defaultdict(list)
     total = 0
+    partial_count = 0
 
     for line_no, body in iter_request_bodies(log_text):
         total += 1
+        if body.get("_partial"):
+            partial_count += 1
         summary = summarize(body, line_no)
         issues = find_issues(
             body,
@@ -308,11 +428,14 @@ def main(argv: List[str]) -> int:
             if len(issues_to_samples[issue]) < args.max_samples:
                 issues_to_samples[issue].append(summary)
 
-    print(f"Parsed request_body entries: {total}")
+    print(f"Parsed request_body entries: {total} (complete: {total - partial_count}, truncated: {partial_count})")
     print("")
 
     if not issue_counter:
         print("No request_body entries found.")
+        if not error_lines:
+            print("\nHint: 如果使用非 sensitive-logs 模式，日志中不包含 request_body 内容。")
+            print("      请使用 --features sensitive-logs 重新编译，或检查 kiro_request_body_bytes 字段。")
         return 0
 
     print("Issue counts:")
@@ -341,6 +464,71 @@ def main(argv: List[str]) -> int:
         print("")
 
     return 0
+
+
+def _scan_400_errors(log_text: str) -> List[Dict[str, Any]]:
+    """扫描日志中的 400 Improperly formed request 错误行，关联最近的请求体。
+
+    对每个 400 错误，向上查找最近的 'Kiro request body:' DEBUG 行，
+    解析其中的请求体并做启发式诊断。
+    """
+    lines = log_text.splitlines()
+    results = []
+    body_bytes_re = re.compile(r"(?:kiro_)?request_body_bytes=(\d+)")
+    url_re = re.compile(r"request_url=(\S+)")
+    decoder = json.JSONDecoder()
+
+    for line_no_0, line in enumerate(lines):
+        if "Improperly formed request" not in line:
+            continue
+        clean = strip_ansi(line)
+        entry: Dict[str, Any] = {"line_no": line_no_0 + 1}
+
+        m = body_bytes_re.search(clean)
+        if m:
+            entry["body_bytes"] = int(m.group(1))
+
+        m = url_re.search(clean)
+        if m:
+            entry["url"] = m.group(1)
+
+        # 向上查找最近的 "Kiro request body:" 行（最多回溯 20 行）
+        req_body = None
+        for back in range(1, min(21, line_no_0 + 1)):
+            prev_line = strip_ansi(lines[line_no_0 - back])
+            marker = "Kiro request body: "
+            idx = prev_line.find(marker)
+            if idx == -1:
+                continue
+            brace = prev_line.find("{", idx + len(marker))
+            if brace == -1:
+                break
+            try:
+                req_body, _ = decoder.raw_decode(prev_line, brace)
+            except json.JSONDecodeError:
+                # 截断的 JSON，做 partial 解析
+                entry["_req_body_partial"] = True
+                req_body = _partial_parse_request_body(prev_line[brace:], line_no_0 - back + 1)
+            entry["_req_body_line"] = line_no_0 - back + 1
+            break
+
+        if req_body and isinstance(req_body, dict):
+            entry["_req_body"] = req_body
+            if not req_body.get("_partial"):
+                # 完整 JSON，做深度诊断
+                issues = find_issues(
+                    req_body,
+                    max_history_messages=100,
+                    large_payload_bytes=80_000,
+                    huge_payload_bytes=200_000,
+                )
+                entry["issues"] = issues
+                summary = summarize(req_body, entry.get("_req_body_line", 0))
+                entry["summary"] = summary
+
+        results.append(entry)
+
+    return results
 
 
 if __name__ == "__main__":
