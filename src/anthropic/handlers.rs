@@ -201,6 +201,11 @@ fn map_kiro_provider_error_to_response(request_body: &str, err: Error) -> Respon
     }
 
     tracing::error!("Kiro API 调用失败: {}", err);
+    #[cfg(feature = "sensitive-logs")]
+    tracing::error!(
+        "上游报错，完整请求体（用于诊断）: {}",
+        truncate_base64_in_request_body(request_body)
+    );
     (
         StatusCode::BAD_GATEWAY,
         Json(ErrorResponse::new(
@@ -578,12 +583,6 @@ pub async fn post_messages(
             .into_response();
     }
 
-    #[cfg(feature = "sensitive-logs")]
-    tracing::debug!(
-        "Kiro request body: {}",
-        truncate_base64_in_request_body(&request_body)
-    );
-    #[cfg(not(feature = "sensitive-logs"))]
     tracing::debug!(
         kiro_request_body_bytes = request_body.len(),
         "已构建 Kiro 请求体"
@@ -1215,12 +1214,6 @@ pub async fn post_messages_cc(
             .into_response();
     }
 
-    #[cfg(feature = "sensitive-logs")]
-    tracing::debug!(
-        "Kiro request body: {}",
-        truncate_base64_in_request_body(&request_body)
-    );
-    #[cfg(not(feature = "sensitive-logs"))]
     tracing::debug!(
         kiro_request_body_bytes = request_body.len(),
         "已构建 Kiro 请求体"

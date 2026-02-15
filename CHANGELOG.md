@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **请求体日志仅在上游报错时输出完整内容** (`src/anthropic/handlers.rs`)
+  - 移除发送前的完整请求体 DEBUG 日志（`sensitive-logs` 模式下每次请求都输出几十 KB JSON），统一只输出字节大小
+  - 上游报错时在 `sensitive-logs` 模式下以 ERROR 级别输出完整请求体（截断 base64），用于诊断 400/502 等错误
+
 ## [v1.0.15] - 2026-02-15
 
 ### Added
