@@ -4,7 +4,7 @@
 
 use uuid::Uuid;
 
-use crate::image::process_image;
+use crate::image::{process_gif_frames, process_image, process_image_to_format};
 use crate::kiro::model::requests::conversation::{
     AssistantMessage, ConversationState, CurrentMessage, HistoryAssistantMessage,
     HistoryUserMessage, KiroImage, Message, UserInputMessage, UserInputMessageContext, UserMessage,
@@ -433,27 +433,109 @@ fn process_message_content(
                             if let Some(source) = block.source
                                 && let Some(format) = get_image_format(&source.media_type)
                             {
-                                // 处理图片（可能缩放）
-                                match process_image(
-                                    &source.data,
-                                    &format,
-                                    compression_config,
-                                    total_image_count,
-                                ) {
-                                    Ok(result) => {
-                                        if result.was_resized {
+                                // GIF：抽帧为多张静态图，避免动图 base64 体积巨大导致上游 400
+                                if format.eq_ignore_ascii_case("gif") {
+                                    match process_gif_frames(
+                                        &source.data,
+                                        compression_config,
+                                        total_image_count,
+                                    ) {
+                                        Ok(gif) => {
+                                            let total_final_bytes: usize = gif
+                                                .frames
+                                                .iter()
+                                                .map(|f| f.final_bytes_len)
+                                                .sum();
                                             tracing::info!(
-                                                "图片已缩放: {:?} -> {:?}, tokens: {}",
-                                                result.original_size,
-                                                result.final_size,
-                                                result.tokens
+                                                duration_ms = gif.duration_ms,
+                                                source_frames = gif.source_frames,
+                                                sampled_frames = gif.frames.len(),
+                                                sampling_interval_ms = gif.sampling_interval_ms,
+                                                output_format = gif.output_format,
+                                                original_bytes_len = gif.frames[0].original_bytes_len,
+                                                total_final_bytes = total_final_bytes,
+                                                "GIF 已抽帧并重编码"
                                             );
+
+                                            for f in gif.frames {
+                                                images.push(KiroImage::from_base64(
+                                                    gif.output_format,
+                                                    f.data,
+                                                ));
+                                            }
                                         }
-                                        images.push(KiroImage::from_base64(format, result.data));
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "GIF 抽帧失败，回退为静态图（可能丢失动图信息）: {}",
+                                                e
+                                            );
+                                            match process_image_to_format(
+                                                &source.data,
+                                                "jpeg",
+                                                compression_config,
+                                                total_image_count,
+                                            ) {
+                                                Ok(result) => {
+                                                    images.push(KiroImage::from_base64(
+                                                        "jpeg",
+                                                        result.data,
+                                                    ));
+                                                }
+                                                Err(e2) => {
+                                                    tracing::warn!(
+                                                        "GIF 回退重编码失败，尝试静态 GIF: {}",
+                                                        e2
+                                                    );
+                                                    match process_image(
+                                                        &source.data,
+                                                        &format,
+                                                        compression_config,
+                                                        total_image_count,
+                                                    ) {
+                                                        Ok(result) => {
+                                                            images.push(KiroImage::from_base64(
+                                                                format,
+                                                                result.data,
+                                                            ));
+                                                        }
+                                                        Err(e3) => {
+                                                            tracing::warn!(
+                                                                "图片处理失败，使用原始数据: {}",
+                                                                e3
+                                                            );
+                                                            images.push(KiroImage::from_base64(
+                                                                format,
+                                                                source.data,
+                                                            ));
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
-                                    Err(e) => {
-                                        tracing::warn!("图片处理失败，使用原始数据: {}", e);
-                                        images.push(KiroImage::from_base64(format, source.data));
+                                } else {
+                                    // 处理静态图片（可能缩放）
+                                    match process_image(
+                                        &source.data,
+                                        &format,
+                                        compression_config,
+                                        total_image_count,
+                                    ) {
+                                        Ok(result) => {
+                                            if result.was_resized {
+                                                tracing::info!(
+                                                    "图片已缩放: {:?} -> {:?}, tokens: {}",
+                                                    result.original_size,
+                                                    result.final_size,
+                                                    result.tokens
+                                                );
+                                            }
+                                            images.push(KiroImage::from_base64(format, result.data));
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("图片处理失败，使用原始数据: {}", e);
+                                            images.push(KiroImage::from_base64(format, source.data));
+                                        }
                                     }
                                 }
                             }
