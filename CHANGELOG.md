@@ -1,5 +1,16 @@
 # Changelog
 
+## [v1.0.18] - 2026-02-17
+
+### Added
+- **GIF 动图抽帧采样与强制重编码** (`src/image.rs`, `src/anthropic/converter.rs`)
+  - 新增 `process_gif_frames()` 函数，将 GIF 动图抽帧为多张静态 JPEG，避免动图 base64 体积巨大导致上游 400 错误
+  - 采样策略：总帧数不超过 20 帧，每秒最多 5 帧，超长 GIF 自动降低采样频率均匀抽取
+  - 新增 `process_image_to_format()` 函数，支持将任意图片强制重编码为指定格式
+  - GIF 抽帧失败时多级回退：JPEG 重编码 → 静态 GIF 处理 → 原始数据透传
+  - `process_image()` 对 GIF 格式强制重编码为静态帧，即使无需缩放也避免透传体积巨大的动图
+  - `ImageProcessResult` 新增 `was_reencoded`、`original_bytes_len`、`final_bytes_len` 字段
+
 ## [v1.0.17] - 2026-02-15
 
 ### Added
