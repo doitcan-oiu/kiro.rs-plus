@@ -382,6 +382,42 @@ pub async fn get_models() -> impl IntoResponse {
 
     let models = vec![
         Model {
+            id: "claude-sonnet-4-6".to_string(),
+            object: "model".to_string(),
+            created: 1770314400,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Sonnet 4.6".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 32000,
+            context_length: Some(1_000_000),
+            max_completion_tokens: Some(64_000),
+            thinking: Some(true),
+        },
+        Model {
+            id: "claude-sonnet-4-6-thinking".to_string(),
+            object: "model".to_string(),
+            created: 1770314400,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Sonnet 4.6 (Thinking)".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 32000,
+            context_length: Some(1_000_000),
+            max_completion_tokens: Some(64_000),
+            thinking: Some(true),
+        },
+        Model {
+            id: "claude-sonnet-4-6-agentic".to_string(),
+            object: "model".to_string(),
+            created: 1770314400,
+            owned_by: "anthropic".to_string(),
+            display_name: "Claude Sonnet 4.6 (Agentic)".to_string(),
+            model_type: "chat".to_string(),
+            max_tokens: 32000,
+            context_length: Some(1_000_000),
+            max_completion_tokens: Some(64_000),
+            thinking: Some(true),
+        },
+        Model {
             id: "claude-sonnet-4-5-20250929".to_string(),
             object: "model".to_string(),
             created: 1727568000,
@@ -1126,7 +1162,7 @@ fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
         return;
     };
 
-    let is_opus_4_6 = model_lower.contains("opus")
+    let is_opus_or_sonnet_4_6 = (model_lower.contains("opus") || model_lower.contains("sonnet"))
         && (model_lower.contains("4-6") || model_lower.contains("4.6"));
 
     let thinking_type = if is_opus_4_6 { "adaptive" } else { "enabled" };
@@ -1143,7 +1179,7 @@ fn override_thinking_from_model_name(payload: &mut MessagesRequest) {
         budget_tokens,
     });
 
-    if is_opus_4_6 {
+    if is_opus_or_sonnet_4_6 {
         payload.output_config = Some(OutputConfig {
             effort: "high".to_string(),
         });

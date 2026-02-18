@@ -133,8 +133,8 @@ fn normalize_json_schema(schema: serde_json::Value) -> serde_json::Value {
 /// 模型映射：将 Anthropic 模型名映射到 Kiro 模型 ID
 ///
 /// 映射规则：
-/// - 所有 sonnet → claude-sonnet-4.5
-/// - opus 且显式包含 4.5/4-5 → claude-opus-4.5，否则 → claude-opus-4.6（默认最新版）
+/// - sonnet 且包含 4.6/4-6 → claude-sonnet-4.6，否则 → claude-sonnet-4.5
+/// - opus 且包含 4.6/4-6 → claude-opus-4.6，否则 → claude-opus-4.5
 /// - 所有 haiku → claude-haiku-4.5
 /// - `-agentic` 后缀会被剥离后再映射
 pub fn map_model(model: &str) -> Option<String> {
@@ -143,12 +143,16 @@ pub fn map_model(model: &str) -> Option<String> {
     let model_lower = model_lower.strip_suffix("-agentic").unwrap_or(&model_lower);
 
     if model_lower.contains("sonnet") {
-        Some("claude-sonnet-4.5".to_string())
-    } else if model_lower.contains("opus") {
-        if model_lower.contains("4-5") || model_lower.contains("4.5") {
-            Some("claude-opus-4.5".to_string())
+        if model_lower.contains("4-6") || model_lower.contains("4.6") {
+            Some("claude-sonnet-4.6".to_string())
         } else {
+            Some("claude-sonnet-4.5".to_string())
+        }
+    } else if model_lower.contains("opus") {
+        if model_lower.contains("4-6") || model_lower.contains("4.6") {
             Some("claude-opus-4.6".to_string())
+        } else {
+            Some("claude-opus-4.5".to_string())
         }
     } else if model_lower.contains("haiku") {
         Some("claude-haiku-4.5".to_string())
