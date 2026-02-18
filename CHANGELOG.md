@@ -1,5 +1,7 @@
 # Changelog
 
+## [v1.1.0] - 2026-02-18
+
 ## [v1.0.21] - 2026-02-17
 
 ### Changed
@@ -40,7 +42,7 @@
 
 ### Added
 - **GIF 动图抽帧采样与强制重编码** (`src/image.rs`, `src/anthropic/converter.rs`)
-  - 新增 `process_gif_frames()` 函数，将 GIF 动图抽帧为多张静态 JPEG，避免动图 base64 体积巨大导致上游 400 错误
+  - 新增 `process_gif_frames()` 函数，将 GIF 动图抽帧为多张静态 JPEG，避免动图 base64 体积巨大导致 upstream 400 错误
   - 采样策略：总帧数不超过 20 帧，每秒最多 5 帧，超长 GIF 自动降低采样频率均匀抽取
   - 新增 `process_image_to_format()` 函数，支持将任意图片强制重编码为指定格式
   - GIF 抽帧失败时多级回退：JPEG 重编码 → 静态 GIF 处理 → 原始数据透传
@@ -65,9 +67,9 @@
 ## [v1.0.16] - 2026-02-15
 
 ### Fixed
-- **请求体日志仅在上游报错时输出完整内容** (`src/anthropic/handlers.rs`)
+- **请求体日志仅在 upstream 报错时输出完整内容** (`src/anthropic/handlers.rs`)
   - 移除发送前的完整请求体 DEBUG 日志（`sensitive-logs` 模式下每次请求都输出几十 KB JSON），统一只输出字节大小
-  - 上游报错时在 `sensitive-logs` 模式下以 ERROR 级别输出完整请求体（截断 base64），用于诊断 400/502 等错误
+  - upstream 报错时在 `sensitive-logs` 模式下以 ERROR 级别输出完整请求体（截断 base64），用于诊断 400/502 等错误
 
 ## [v1.0.15] - 2026-02-15
 
@@ -112,7 +114,7 @@
 ### Fixed
 - **WebSearch 仅纯搜索请求走本地处理** (`src/anthropic/websearch.rs`, `src/anthropic/handlers.rs`)
   - 新增 `should_handle_websearch_request()` 精确判断：仅当 tool_choice 强制选择 web_search、tools 仅含 web_search 单工具、或用户消息包含 `Perform a web search for the query:` 前缀时，才路由到本地 WebSearch 处理
-  - 混合工具场景（web_search + 其他工具）改为剔除 web_search 后转发上游，避免普通对话被误当成搜索查询
+  - 混合工具场景（web_search + 其他工具）改为剔除 web_search 后转发 upstream，避免普通对话被误当成搜索查询
   - 新增 `strip_web_search_tools()` 从 tools 列表中移除 web_search 工具
   - 搜索查询提取增加空白归一化处理
 
@@ -125,7 +127,7 @@
   - `post_messages` 和 `post_messages_cc` 均支持自适应压缩
 - **压缩后 tool_use/tool_result 配对修复** (`src/anthropic/compressor.rs`)
   - 新增 `repair_tool_pairing_pass()`：历史截断后自动移除孤立的 tool_use 和 tool_result
-  - 解决截断破坏跨消息 tool_use→tool_result 配对导致上游返回 400 "Improperly formed request" 的问题
+  - 解决截断破坏跨消息 tool_use→tool_result 配对导致 upstream 返回 400 "Improperly formed request" 的问题
 - **stable 版 `floor_char_boundary` 工具函数** (`src/common/utf8.rs`)
   - 新增 `common::utf8` 模块，提供 stable Rust 下的 `floor_char_boundary()` 实现
   - 统一替换项目中散落的 `str::floor_char_boundary()` nightly 调用
@@ -152,12 +154,11 @@
 
 ### Added
 - **请求体大小预检** (`src/anthropic/handlers.rs`, `src/model/config.rs`)
-  - 新增 `max_request_body_bytes` 配置项，序列化后拦截超大请求避免无效上游往返
-  - `post_messages` 和 `post_messages_cc` 均支持预检
+  - 新增 `max_request_body_bytes` 配置项，序列化后拦截超大请求避免无效 upstream 往返
 
 ### Changed
 - **移除无意义的 max_tokens 调整逻辑** (`src/anthropic/handlers.rs`)
-  - 删除 max_tokens 超限警告日志和调整逻辑，因为该值实际不传递给 Kiro 上游
+  - 删除 max_tokens 超限警告日志和调整逻辑，因为该值实际不传递给 Kiro upstream
 
 ## [v1.0.9] - 2026-02-12
 
@@ -246,7 +247,7 @@
 - **压缩统计日志改用字节单位** (`src/anthropic/handlers.rs`)
   - 移除不准确的 token 估算（`compressed_input_tokens`、`tokens_saved`），改为直接输出字节数
   - 字段重命名：`whitespace_saved` → `whitespace_bytes_saved` 等，明确单位语义
-  - 注释更新：说明字节统计用于排查上游请求体大小限制
+  - 注释更新：说明字节统计用于排查 upstream 请求体大小限制
 
 ### Added
 - **日志脱敏工具模块** (`src/common/redact.rs`)
@@ -336,7 +337,7 @@
 
 ### Added
 - **输入压缩管道** (`src/anthropic/compressor.rs`)
-  - 新增 5 层压缩管道，规避 Kiro 上游请求体大小限制
+  - 新增 5 层压缩管道，规避 Kiro upstream 请求体大小限制
   - 空白压缩：连续空行(3+)→2行，行尾空格移除，保留行首缩进
   - thinking 块处理：支持 discard/truncate/keep 三种策略
   - tool_result 智能截断：按行截断保留头尾，行数不足时回退字符级截断
@@ -408,7 +409,7 @@
   - 保留原文件权限，防止 umask 导致凭据文件权限放宽
   - Windows 兼容：`rename` 前先删除已存在的目标文件
   - 避免进程崩溃或并发调用导致凭据文件损坏
-- 限制 `max_tokens` 最大值为 32000（Kiro 上游限制）
+- 限制 `max_tokens` 最大值为 32000（Kiro upstream 限制）
   - 当用户设置超出限制的值时自动调整为 32000
   - 记录 WARN 级别日志，包含原始值和调整后的值
   - 涉及文件：`src/anthropic/handlers.rs`
@@ -416,7 +417,7 @@
   - 默认仅输出 `buffer_len` 和 `request_body_bytes`（长度信息）
   - 启用 `--features sensitive-logs` 时输出完整 `buffer` 和 `request_body`
   - 涉及文件：`src/anthropic/handlers.rs`
-- 修复 Kiro 上游请求兼容性问题
+- 修复 Kiro upstream 请求兼容性问题
   - 空 content（仅 tool_result/image）时使用占位符避免 400
   - 规范化工具 JSON Schema、补全空 description
   - 禁用 reqwest 系统代理探测（仅支持显式 `config.proxy_url`）
@@ -632,7 +633,7 @@
   - 绑定监听地址失败时输出错误日志并退出（exit code 1）
   - HTTP 服务异常退出时输出错误日志并退出（exit code 1）
 
-- 修复合并上游后 `CredentialEntry` 结构体字段缺失导致的编译错误
+- 修复合并 upstream 后 `CredentialEntry` 结构体字段缺失导致的编译错误
   - 添加 `disable_reason: Option<DisableReason>` 字段（公共 API 展示用）
   - 添加 `auto_heal_reason: Option<AutoHealReason>` 字段（内部自愈逻辑用）
 - 修复禁用原因字段不同步问题
